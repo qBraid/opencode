@@ -356,6 +356,62 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
       return content.replace(loaderRegex, "// opencode provider removed by branding")
     },
   },
+
+  // System prompts - update branding and add qBraid description
+  {
+    pattern: "packages/opencode/src/session/prompt/anthropic.txt",
+    transform: (content, config) => {
+      return content.replace(
+        /You are OpenCode, the best coding agent on the planet\./,
+        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+      )
+    },
+  },
+  {
+    pattern: "packages/opencode/src/session/prompt/anthropic-20250930.txt",
+    transform: (content, config) => {
+      return content.replace(
+        /You are OpenCode, the best coding agent on the planet\./,
+        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+      )
+    },
+  },
+  {
+    pattern: "packages/opencode/src/session/prompt/gemini.txt",
+    transform: (content, config) => {
+      return content.replace(
+        /You are OpenCode, the best coding agent on the planet\./,
+        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+      )
+    },
+  },
+  {
+    pattern: "packages/opencode/src/session/prompt/beast.txt",
+    transform: (content, config) => {
+      return content.replace(
+        /You are OpenCode, the best coding agent on the planet\./,
+        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+      )
+    },
+  },
+  {
+    pattern: "packages/opencode/src/session/prompt/qwen.txt",
+    transform: (content, config) => {
+      return content.replace(
+        /You are OpenCode, the best coding agent on the planet\./,
+        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+      )
+    },
+  },
+  {
+    pattern: "packages/opencode/src/session/prompt/copilot-gpt-5.txt",
+    transform: (content, config) => {
+      return content.replace(
+        /You are OpenCode, the best coding agent on the planet\./,
+        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+      )
+    },
+  },
 ]
 
 async function applyFileTransform(filePath: string, config: Branding): Promise<boolean> {
@@ -459,7 +515,7 @@ async function processDirectory(dir: string, config: Branding, replacements: Rep
 
     // Only process relevant file types
     const ext = path.extname(entry.name)
-    if (![".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".toml", ".sh"].includes(ext)) {
+    if (![".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".toml", ".sh", ".txt"].includes(ext)) {
       continue
     }
 
