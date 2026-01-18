@@ -357,6 +357,41 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     },
   },
 
+  // Remove builtin plugins (they don't exist for qBraid branding)
+  {
+    pattern: "packages/opencode/src/plugin/index.ts",
+    transform: (content, config) => {
+      if (!config.models?.exclusive) return content
+
+      // Clear the BUILTIN array - these npm packages don't exist for branded versions
+      // Match the array with its contents across potential newlines
+      return content.replace(
+        /const BUILTIN = \["[^"]*"(?:,\s*"[^"]*")*\]/,
+        "const BUILTIN: string[] = [] // Cleared by branding - no external plugins",
+      )
+    },
+  },
+
+  // Remove custom loaders for providers that don't exist in exclusive models
+  {
+    pattern: "packages/opencode/src/provider/provider.ts",
+    transform: (content, config) => {
+      if (!config.models?.exclusive) return content
+
+      // Comment out all custom loaders when in exclusive mode
+      // This prevents "Provider does not exist in model list" errors
+      // Match the CUSTOM_LOADERS object definition and replace with empty object
+      // The object starts at "const CUSTOM_LOADERS: Record<string, CustomLoader> = {"
+      // and ends with "  }" before "export const Model"
+      return content.replace(
+        /const CUSTOM_LOADERS: Record<string, CustomLoader> = \{[\s\S]*?\n  \}(?=\n\n  export const Model)/,
+        `const CUSTOM_LOADERS: Record<string, CustomLoader> = {
+    // All custom loaders removed by branding (exclusive mode)
+  }`,
+      )
+    },
+  },
+
   // System prompts - update branding and add qBraid description
   {
     pattern: "packages/opencode/src/session/prompt/anthropic.txt",
@@ -416,23 +451,27 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
 
 async function applyFileTransform(filePath: string, config: Branding): Promise<boolean> {
   const relative = path.relative(ROOT, filePath)
+  let content = await Bun.file(filePath).text()
+  let anyModified = false
 
+  // Apply ALL matching transforms for this file (not just the first one)
   for (const { pattern, transform } of FILE_TRANSFORMS) {
     if (relative === pattern || relative.endsWith(pattern)) {
-      const content = await Bun.file(filePath).text()
       const modified = await transform(content, config)
 
       if (modified !== content) {
-        if (!dryRun) {
-          await Bun.write(filePath, modified)
-        }
-        log(`  Applied file transform`)
-        return true
+        content = modified
+        anyModified = true
+        log(`  Applied file transform for pattern: ${pattern}`)
       }
     }
   }
 
-  return false
+  if (anyModified && !dryRun) {
+    await Bun.write(filePath, content)
+  }
+
+  return anyModified
 }
 
 async function applyCustomPatches(config: Branding): Promise<void> {
