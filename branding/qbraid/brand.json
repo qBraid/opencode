@@ -1,0 +1,38 @@
+{
+  "$schema": "../schema.json",
+  "version": 1,
+  "id": "qbraid",
+  "name": "qBraid CodeQ",
+  "logo": {
+    "cli": [
+      ["                   ", "       "],
+      ["█▀▀█ █▀▀█ █▀▀▄ █▀▀▀", " █▀▀█ "],
+      ["█░░░ █░░█ █░░█ █▀▀▀", " █░░█ "],
+      ["▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀", " ▀▀▀█ "]
+    ],
+    "tui": {
+      "left": ["                   ", "█▀▀█ █▀▀█ █▀▀▄ █▀▀▀", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
+      "right": ["       ", " █▀▀█ ", " █__█ ", " ▀▀▀█ "]
+    }
+  },
+  "replacements": {
+    "productName": "codeq",
+    "displayName": "CodeQ",
+    "npmPackage": "codeq",
+    "binaryName": "codeq",
+    "envPrefix": "CODEQ",
+    "appDir": "codeq",
+    "urls": {
+      "website": "https://qbraid.com",
+      "api": "https://api.qbraid.com",
+      "github": "https://github.com/qbraid/codeq"
+    }
+  },
+  "models": {
+    "exclusive": true,
+    "removeProviders": ["opencode"],
+    "source": "./models.json"
+  },
+  "skipFiles": ["**/test/**", "**/*.test.ts", "**/*.spec.ts", "**/fixtures/**"],
+  "patches": {}
+}
