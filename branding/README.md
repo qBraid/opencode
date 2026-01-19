@@ -20,13 +20,13 @@ cd packages/opencode && bun run build
 
 ## What Gets Branded
 
-| Component | Original                   | Branded (qBraid)                 |
-| --------- | -------------------------- | -------------------------------- |
-| Binary    | `opencode`                 | `codeq`                          |
-| CLI Logo  | "open code"                | "code q"                         |
-| Env Vars  | `OPENCODE_*`               | `CODEQ_*`                        |
-| App Dir   | `~/.local/share/opencode/` | `~/.local/share/codeq/`          |
-| Models    | Zen + all providers        | qBraid + Anthropic + OpenAI only |
+| Component | Original                   | Branded (qBraid)        |
+| --------- | -------------------------- | ----------------------- |
+| Binary    | `opencode`                 | `codeq`                 |
+| CLI Logo  | "open code"                | "code q" (purple Q)     |
+| Env Vars  | `OPENCODE_*`               | `CODEQ_*`               |
+| App Dir   | `~/.local/share/opencode/` | `~/.local/share/codeq/` |
+| Models    | models.dev + all providers | qBraid provider only    |
 
 ## Directory Structure
 
