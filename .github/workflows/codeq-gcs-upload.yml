@@ -1,0 +1,216 @@
+name: Upload CodeQ to GCS
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g., v1.0.0). Leave empty to use current timestamp."
+        required: false
+        type: string
+
+jobs:
+  build:
+    name: Build CodeQ binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            build-os: linux
+            build-arch: x64
+          - os: ubuntu-latest
+            target: linux-arm64
+            build-os: linux
+            build-arch: arm64
+          - os: macos-latest
+            target: darwin-x64
+            build-os: darwin
+            build-arch: x64
+          - os: macos-latest
+            target: darwin-arm64
+            build-os: darwin
+            build-arch: arm64
+          - os: windows-latest
+            target: windows-x64
+            build-os: win32
+            build-arch: x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Cache ~/.bun
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun
+          key: ${{ runner.os }}-bun-${{ hashFiles('package.json') }}-${{ hashFiles('bun.lockb', 'bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ hashFiles('package.json') }}-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Apply qBraid branding
+        run: bun branding/apply.ts qbraid
+
+      - name: Build CodeQ binary
+        run: |
+          cd packages/opencode
+          bun run build --single
+        env:
+          CODEQ_VERSION: ${{ inputs.version || '' }}
+
+      - name: List build artifacts
+        run: ls -la packages/opencode/dist/
+        shell: bash
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeq-${{ matrix.target }}
+          path: packages/opencode/dist/codeq-*/
+          if-no-files-found: error
+
+  deploy:
+    name: Upload to GCS
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT_ID: qbraid-prod
+      GCS_BUCKET: qbraid-codeq
+      WORKLOAD_IDENTITY_PROVIDER: projects/314301605548/locations/global/workloadIdentityPools/github-actions-v2-pool/providers/github-oidc-v2
+      SERVICE_ACCOUNT: github-actions-v2-deploy@qbraid-prod.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate with Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="dev-$(date +%Y%m%d-%H%M%S)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
+
+      - name: Prepare binaries for upload
+        run: |
+          mkdir -p upload
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Process each artifact
+          for artifact_dir in artifacts/codeq-*/; do
+            if [ -d "$artifact_dir" ]; then
+              # Find the binary directory inside
+              for bin_dir in "$artifact_dir"codeq-*/; do
+                if [ -d "$bin_dir" ]; then
+                  # Extract target name from directory
+                  dirname=$(basename "$bin_dir")
+                  # e.g., codeq-darwin-arm64 -> darwin-arm64
+                  target=${dirname#codeq-}
+                  
+                  # Create versioned path
+                  mkdir -p "upload/$VERSION/$target"
+                  
+                  # Copy binaries
+                  if [ -f "$bin_dir/bin/codeq" ]; then
+                    cp "$bin_dir/bin/codeq" "upload/$VERSION/$target/"
+                  elif [ -f "$bin_dir/bin/codeq.exe" ]; then
+                    cp "$bin_dir/bin/codeq.exe" "upload/$VERSION/$target/"
+                  fi
+                  
+                  # Copy package.json if exists
+                  if [ -f "$bin_dir/package.json" ]; then
+                    cp "$bin_dir/package.json" "upload/$VERSION/$target/"
+                  fi
+                fi
+              done
+            fi
+          done
+
+          # Show what we're uploading
+          echo "Files to upload:"
+          find upload -type f
+
+      - name: Upload binaries to GCS
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Upload versioned binaries
+          gsutil -m cp -r "upload/$VERSION" "gs://${{ env.GCS_BUCKET }}/"
+
+          # If this is a release version (starts with v), also update latest
+          if [[ "$VERSION" == v* ]]; then
+            echo "Updating latest symlinks..."
+            gsutil -m rm -rf "gs://${{ env.GCS_BUCKET }}/latest" || true
+            gsutil -m cp -r "upload/$VERSION" "gs://${{ env.GCS_BUCKET }}/latest"
+          fi
+
+      - name: Verify upload
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Listing contents of gs://${{ env.GCS_BUCKET }}/$VERSION/:"
+          gsutil ls -r "gs://${{ env.GCS_BUCKET }}/$VERSION/"
+
+          echo ""
+          echo "Download URLs:"
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
+            echo "  $target: https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/$target/codeq"
+          done
+
+      - name: Create version manifest
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cat > manifest.json << EOF
+          {
+            "version": "$VERSION",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "binaries": {
+              "darwin-arm64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/darwin-arm64/codeq",
+              "darwin-x64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/darwin-x64/codeq",
+              "linux-arm64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/linux-arm64/codeq",
+              "linux-x64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/linux-x64/codeq",
+              "windows-x64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/windows-x64/codeq.exe"
+            }
+          }
+          EOF
+
+          gsutil cp manifest.json "gs://${{ env.GCS_BUCKET }}/$VERSION/manifest.json"
+
+          # Update latest manifest for release versions
+          if [[ "$VERSION" == v* ]]; then
+            gsutil cp manifest.json "gs://${{ env.GCS_BUCKET }}/latest/manifest.json"
+          fi
+
+          echo "Manifest uploaded:"
+          cat manifest.json
