@@ -134,9 +134,11 @@ export namespace SessionProcessor {
                     if (thoughtSignature) {
                       metadata = {
                         ...metadata,
-                        // Store under both 'vertex' and 'google' keys for AI SDK compatibility
+                        // Store under vertex/google keys for AI SDK compatibility with native providers
                         vertex: { ...(metadata as any)?.vertex, thoughtSignature },
                         google: { ...(metadata as any)?.google, thoughtSignature },
+                        // Store under openaiCompatible for qBraid proxy passthrough
+                        openaiCompatible: { ...(metadata as any)?.openaiCompatible, _thought_signature: thoughtSignature },
                       }
                     }
 
