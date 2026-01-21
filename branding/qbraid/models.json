@@ -3,35 +3,109 @@
     "id": "qbraid",
     "name": "qBraid",
     "env": ["QBRAID_API_KEY"],
-    "npm": "@ai-sdk/openai-compatible",
+    "npm": "@ai-sdk/qbraid",
     "api": "https://account-v2.qbraid.com/api/ai/v1",
     "models": {
-      "claude-sonnet-4-5": {
-        "id": "claude-sonnet-4-5",
-        "name": "Claude 4.5 Sonnet",
-        "family": "claude",
-        "release_date": "2025-01-01",
+      "claude-opus-4-5": {
+        "id": "claude-opus-4-5",
+        "name": "Claude 4.5 Opus",
+        "family": "claude-opus",
+        "release_date": "2025-11-24",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
         "tool_call": true,
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25
+        },
         "limit": {
           "context": 200000,
-          "output": 65536
+          "output": 64000
+        },
+        "options": {}
+      },
+      "claude-sonnet-4-5": {
+        "id": "claude-sonnet-4-5",
+        "name": "Claude 4.5 Sonnet",
+        "family": "claude-sonnet",
+        "release_date": "2025-09-29",
+        "attachment": true,
+        "reasoning": true,
+        "temperature": true,
+        "tool_call": true,
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 3,
+          "output": 15,
+          "cache_read": 0.3,
+          "cache_write": 3.75
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
         },
         "options": {}
       },
       "claude-haiku-4-5": {
         "id": "claude-haiku-4-5",
         "name": "Claude 4.5 Haiku",
-        "family": "claude",
-        "release_date": "2025-01-01",
+        "family": "claude-haiku",
+        "release_date": "2025-10-15",
         "attachment": true,
-        "reasoning": false,
+        "reasoning": true,
         "temperature": true,
         "tool_call": true,
+        "modalities": {
+          "input": ["text", "image", "pdf"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 1,
+          "output": 5,
+          "cache_read": 0.1,
+          "cache_write": 1.25
+        },
         "limit": {
           "context": 200000,
+          "output": 64000
+        },
+        "options": {}
+      },
+      "gemini-3-pro": {
+        "id": "gemini-3-pro",
+        "name": "Gemini 3 Pro",
+        "family": "gemini-pro",
+        "release_date": "2025-11-18",
+        "attachment": true,
+        "reasoning": true,
+        "temperature": true,
+        "tool_call": true,
+        "modalities": {
+          "input": ["text", "image", "video", "audio", "pdf"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 2,
+          "output": 12,
+          "cache_read": 0.2,
+          "context_over_200k": {
+            "input": 4,
+            "output": 18,
+            "cache_read": 0.4
+          }
+        },
+        "limit": {
+          "context": 1048576,
           "output": 65536
         },
         "options": {}
@@ -39,14 +113,28 @@
       "gemini-3-flash": {
         "id": "gemini-3-flash",
         "name": "Gemini 3 Flash",
-        "family": "gemini",
-        "release_date": "2025-01-01",
+        "family": "gemini-flash",
+        "release_date": "2025-12-17",
         "attachment": true,
-        "reasoning": false,
+        "reasoning": true,
         "temperature": true,
         "tool_call": true,
+        "modalities": {
+          "input": ["text", "image", "video", "audio", "pdf"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 0.5,
+          "output": 3,
+          "cache_read": 0.05,
+          "context_over_200k": {
+            "input": 0.5,
+            "output": 3,
+            "cache_read": 0.05
+          }
+        },
         "limit": {
-          "context": 1000000,
+          "context": 1048576,
           "output": 65536
         },
         "options": {}
@@ -55,14 +143,23 @@
         "id": "grok-4.1-fast",
         "name": "Grok 4.1 Fast",
         "family": "grok",
-        "release_date": "2025-01-01",
+        "release_date": "2025-11-19",
         "attachment": true,
         "reasoning": false,
         "temperature": true,
         "tool_call": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 0.2,
+          "output": 0.5,
+          "cache_read": 0.05
+        },
         "limit": {
-          "context": 128000,
-          "output": 65536
+          "context": 2000000,
+          "output": 30000
         },
         "options": {}
       }
