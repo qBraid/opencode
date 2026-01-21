@@ -3,7 +3,7 @@
     "id": "qbraid",
     "name": "qBraid",
     "env": ["QBRAID_API_KEY"],
-    "npm": "@ai-sdk/openai-compatible",
+    "npm": "@ai-sdk/qbraid",
     "api": "https://account-v2.qbraid.com/api/ai/v1",
     "models": {
       "claude-sonnet-4-5": {

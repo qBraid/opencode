@@ -25,6 +25,7 @@ import { createOpenAI } from "@ai-sdk/openai"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { createOpenRouter, type LanguageModelV2 } from "@openrouter/ai-sdk-provider"
 import { createOpenaiCompatible as createGitHubCopilotOpenAICompatible } from "./sdk/openai-compatible/src"
+import { createQBraid } from "./sdk/qbraid"
 import { createXai } from "@ai-sdk/xai"
 import { createMistral } from "@ai-sdk/mistral"
 import { createGroq } from "@ai-sdk/groq"
@@ -64,6 +65,8 @@ export namespace Provider {
     "@gitlab/gitlab-ai-provider": createGitLab,
     // @ts-ignore (TODO: kill this code so we dont have to maintain it)
     "@ai-sdk/github-copilot": createGitHubCopilotOpenAICompatible,
+    // @ts-ignore - qBraid provider with Gemini 3 thought signature support (custom signature)
+    "@ai-sdk/qbraid": createQBraid,
   }
 
   type CustomModelLoader = (sdk: any, modelID: string, options?: Record<string, any>) => Promise<any>
@@ -1024,9 +1027,15 @@ export namespace Provider {
         })
       }
 
-      // Special case: google-vertex-anthropic uses a subpath import
-      const bundledKey =
-        model.providerID === "google-vertex-anthropic" ? "@ai-sdk/google-vertex/anthropic" : model.api.npm
+      // Special cases for provider resolution
+      // - google-vertex-anthropic uses a subpath import
+      // - qbraid uses custom provider with thought signature support
+      let bundledKey = model.api.npm
+      if (model.providerID === "google-vertex-anthropic") {
+        bundledKey = "@ai-sdk/google-vertex/anthropic"
+      } else if (model.providerID === "qbraid") {
+        bundledKey = "@ai-sdk/qbraid"
+      }
       const bundledFn = BUNDLED_PROVIDERS[bundledKey]
       if (bundledFn) {
         log.info("using bundled provider", { providerID: model.providerID, pkg: bundledKey })

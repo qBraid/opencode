@@ -15,6 +15,7 @@ import { Config } from "@/config/config"
 import { SessionCompaction } from "./compaction"
 import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
+import { getThoughtSignature } from "@/provider/sdk/qbraid"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -126,6 +127,19 @@ export namespace SessionProcessor {
                 case "tool-call": {
                   const match = toolcalls[value.toolCallId]
                   if (match) {
+                    // Check for thought signature from qBraid provider
+                    // Gemini 3 requires thought signatures to be passed back in multi-turn function calling
+                    const thoughtSignature = getThoughtSignature(value.toolCallId)
+                    let metadata = value.providerMetadata
+                    if (thoughtSignature) {
+                      metadata = {
+                        ...metadata,
+                        // Store under both 'vertex' and 'google' keys for AI SDK compatibility
+                        vertex: { ...(metadata as any)?.vertex, thoughtSignature },
+                        google: { ...(metadata as any)?.google, thoughtSignature },
+                      }
+                    }
+
                     const part = await Session.updatePart({
                       ...match,
                       tool: value.toolName,
@@ -136,7 +150,7 @@ export namespace SessionProcessor {
                           start: Date.now(),
                         },
                       },
-                      metadata: value.providerMetadata,
+                      metadata,
                     })
                     toolcalls[value.toolCallId] = part as MessageV2.ToolPart
 
