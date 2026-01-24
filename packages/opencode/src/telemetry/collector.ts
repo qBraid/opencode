@@ -6,7 +6,6 @@
  */
 
 import { Log } from "../util/log"
-import { Bus } from "../bus"
 import { Config } from "../config/config"
 import { createSanitizer, hashFilePath, getFileExtension } from "./sanitizer"
 import { createSignalTracker, type SignalTracker } from "./signals"

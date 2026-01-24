@@ -152,17 +152,18 @@ function subscribeToEvents(state: TelemetryState): void {
     Bus.subscribe(MessageV2.Event.PartUpdated, (event) => {
       const { part } = event.properties
 
-      // Handle tool calls
-      if (part.type === "tool" && part.state === "completed") {
+      // Handle completed tool calls
+      if (part.type === "tool" && (part.state === "completed" || part.state === "error")) {
         const duration = part.time?.end && part.time?.start ? part.time.end - part.time.start : 0
+        const status = part.state === "completed" ? "success" : "error"
 
         collector.recordToolCall(
           part.tool,
-          part.state === "completed" ? "success" : "error",
+          status,
           duration,
           part.input ? JSON.stringify(part.input).length : undefined,
           part.output ? part.output.length : undefined,
-          undefined, // errorType - would need to parse from output
+          status === "error" ? "tool_error" : undefined,
         )
       }
 
