@@ -11,6 +11,7 @@ import { Instance } from "./instance"
 import { Vcs } from "./vcs"
 import { Log } from "@/util/log"
 import { ShareNext } from "@/share/share-next"
+import { Telemetry } from "@/telemetry"
 
 export async function InstanceBootstrap() {
   Log.Default.info("bootstrapping", { directory: Instance.directory })
@@ -22,6 +23,12 @@ export async function InstanceBootstrap() {
   FileWatcher.init()
   File.init()
   Vcs.init()
+
+  // Initialize qBraid telemetry (CodeQ-specific)
+  // This is a no-op if telemetry is disabled by consent or config
+  await Telemetry.initIntegration().catch((error) => {
+    Log.Default.warn("telemetry initialization failed", { error })
+  })
 
   Bus.subscribe(Command.Event.Executed, async (payload) => {
     if (payload.properties.name === Command.Default.INIT) {
