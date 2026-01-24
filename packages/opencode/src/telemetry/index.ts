@@ -7,7 +7,10 @@
  * Usage:
  *   import { Telemetry } from "./telemetry"
  *
- *   // Initialize at startup
+ *   // Initialize at startup (with Event Bus integration)
+ *   await Telemetry.initIntegration()
+ *
+ *   // Or initialize manually without Event Bus
  *   await Telemetry.initialize(authToken)
  *
  *   // Start a session
@@ -33,14 +36,43 @@ import {
   type TelemetryCollector,
 } from "./collector"
 import { getConsentStatus, isTelemetryEnabled, clearConsentCache } from "./consent"
+import {
+  initTelemetryIntegration,
+  shutdownTelemetryIntegration,
+  finalizeTurn,
+  recordUserTurn,
+  recordRetry,
+} from "./integration"
 import type { ConsentStatus, TelemetrySession, TelemetryTurn } from "./types"
 
 export namespace Telemetry {
   /**
-   * Initialize the telemetry system
+   * Initialize the telemetry system with Event Bus integration
    *
-   * Must be called before any other telemetry functions.
-   * Will check consent and configure collection accordingly.
+   * This is the recommended way to initialize telemetry. It:
+   * - Checks consent based on user tier
+   * - Subscribes to relevant Event Bus events
+   * - Automatically tracks sessions, messages, tool calls, and file changes
+   */
+  export async function initIntegration(): Promise<void> {
+    await initTelemetryIntegration()
+  }
+
+  /**
+   * Shutdown the telemetry system with Event Bus integration
+   *
+   * Unsubscribes from events and flushes pending data.
+   * Should be called on application exit.
+   */
+  export async function shutdownIntegration(): Promise<void> {
+    await shutdownTelemetryIntegration()
+  }
+
+  /**
+   * Initialize the telemetry system (manual mode, no Event Bus)
+   *
+   * Use this if you want to manually control telemetry collection
+   * without automatic Event Bus integration.
    *
    * @param authToken - Optional qBraid auth token for consent lookup
    */
@@ -49,7 +81,7 @@ export namespace Telemetry {
   }
 
   /**
-   * Shutdown the telemetry system
+   * Shutdown the telemetry system (manual mode)
    *
    * Flushes any pending data and cleans up resources.
    * Should be called on application exit.
@@ -57,6 +89,26 @@ export namespace Telemetry {
   export async function shutdown(): Promise<void> {
     await shutdownTelemetry()
   }
+
+  /**
+   * Finalize a turn when assistant response is complete
+   *
+   * Called to record the assistant's response and complete the turn.
+   * This should be called after the LLM streaming is complete.
+   */
+  export const completeTurn = finalizeTurn
+
+  /**
+   * Record a user message (start of a turn)
+   *
+   * Use this for manual recording when not using Event Bus integration.
+   */
+  export const userMessage = recordUserTurn
+
+  /**
+   * Record that a turn was retried
+   */
+  export const retry = recordRetry
 
   /**
    * Start collecting for a new session

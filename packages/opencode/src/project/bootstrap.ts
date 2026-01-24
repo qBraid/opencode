@@ -13,6 +13,7 @@ import { Log } from "@/util/log"
 import { ShareNext } from "@/share/share-next"
 import { Snapshot } from "../snapshot"
 import { Truncate } from "../tool/truncation"
+import { Telemetry } from "@/telemetry"
 
 export async function InstanceBootstrap() {
   Log.Default.info("bootstrapping", { directory: Instance.directory })
@@ -26,6 +27,12 @@ export async function InstanceBootstrap() {
   Vcs.init()
   Snapshot.init()
   Truncate.init()
+
+  // Initialize qBraid telemetry (CodeQ-specific)
+  // This is a no-op if telemetry is disabled by consent or config
+  await Telemetry.initIntegration().catch((error) => {
+    Log.Default.warn("telemetry initialization failed", { error })
+  })
 
   Bus.subscribe(Command.Event.Executed, async (payload) => {
     if (payload.properties.name === Command.Default.INIT) {
