@@ -343,7 +343,7 @@ export class TelemetryCollector {
   /**
    * Finalize the current turn and queue for upload
    */
-  private finalizeTurn(): void {
+  finalizeTurn(): void {
     if (!this.sessionState?.currentTurn) return
 
     const turn = this.sessionState.currentTurn as TelemetryTurn

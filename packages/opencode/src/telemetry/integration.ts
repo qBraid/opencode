@@ -1,7 +1,7 @@
 /**
  * Telemetry Integration
  *
- * Integrates the telemetry system with OpenCode's Event Bus.
+ * Integrates the telemetry system with CodeQ's Event Bus.
  * This module subscribes to relevant events and feeds data to the collector.
  */
 
@@ -13,7 +13,11 @@ import { File } from "../file"
 import { Log } from "../util/log"
 import { Auth } from "../auth"
 import { Instance } from "../project/instance"
+import { Storage } from "../storage/storage"
 import { getCollector, initializeTelemetry, shutdownTelemetry } from "./collector"
+import path from "path"
+import os from "os"
+import fs from "fs/promises"
 
 const log = Log.create({ service: "telemetry:integration" })
 
@@ -59,6 +63,50 @@ const getTelemetryState = Instance.state<TelemetryState>(
 )
 
 /**
+ * Get qBraid API key from config or environment
+ */
+async function getQBraidApiKey(): Promise<string | undefined> {
+  // Try environment variable first
+  if (process.env.QBRAID_API_KEY) {
+    return process.env.QBRAID_API_KEY
+  }
+
+  // Try to get from CodeQ config (provider.qbraid.options.apiKey)
+  try {
+    const { Config } = await import("../config/config")
+    const config = await Config.get()
+    const apiKey = config.provider?.qbraid?.options?.apiKey
+    if (apiKey && typeof apiKey === "string") {
+      return apiKey
+    }
+  } catch (error) {
+    log.debug("could not read qbraid api key from config")
+  }
+
+  // Fall back to ~/.qbraid/qbraidrc file
+  try {
+    const qbraidrcPath = path.join(os.homedir(), ".qbraid", "qbraidrc")
+    const content = await fs.readFile(qbraidrcPath, "utf-8")
+
+    // Parse INI-style config
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith("api-key")) {
+        const match = trimmed.match(/api-key\s*=\s*(.+)/)
+        if (match) {
+          return match[1].trim()
+        }
+      }
+    }
+  } catch (error) {
+    // File doesn't exist or can't be read
+    log.debug("no qbraidrc file found")
+  }
+
+  return undefined
+}
+
+/**
  * Initialize telemetry and subscribe to events
  */
 export async function initTelemetryIntegration(): Promise<void> {
@@ -72,17 +120,55 @@ export async function initTelemetryIntegration(): Promise<void> {
 
   // Get auth token if available
   let authToken: string | undefined
+
+  // First try to get from CodeQ auth system
   try {
     const authData = await Auth.all()
     // Find qBraid auth if available
     for (const [key, value] of Object.entries(authData)) {
-      if (key.includes("qbraid") && value.token) {
+      if (key.includes("qbraid") && value.type === "wellknown" && value.token) {
         authToken = value.token
         break
       }
     }
   } catch (error) {
-    log.debug("no auth token available for telemetry")
+    log.debug("no auth token in codeq auth system")
+  }
+
+  // Fall back to qBraid API key from config or qbraidrc
+  if (!authToken) {
+    authToken = await getQBraidApiKey()
+    if (authToken) {
+      log.debug("using qbraid api key for telemetry")
+    }
+  }
+
+  // Fetch user info from consent endpoint before initializing
+  if (authToken) {
+    try {
+      const { Config } = await import("../config/config")
+      const config = await Config.get()
+      const endpoint = config.qbraid?.telemetry?.endpoint ?? "https://qbraid-telemetry-314301605548.us-central1.run.app"
+      
+      const response = await fetch(`${endpoint}/api/v1/consent`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+      })
+      
+      if (response.ok) {
+        const consentData = await response.json() as { userId: string; organizationId?: string }
+        cachedUserInfo = {
+          userId: consentData.userId,
+          organizationId: consentData.organizationId,
+        }
+        log.debug("fetched user info for telemetry", { userId: consentData.userId })
+      }
+    } catch (error) {
+      log.warn("failed to fetch user info for telemetry", { error })
+    }
   }
 
   // Initialize the telemetry system
@@ -94,6 +180,9 @@ export async function initTelemetryIntegration(): Promise<void> {
   state.initialized = true
   log.info("telemetry integration initialized")
 }
+
+// Store user info from consent endpoint
+let cachedUserInfo: { userId: string; organizationId?: string } | null = null
 
 /**
  * Subscribe to all relevant events
@@ -107,11 +196,14 @@ function subscribeToEvents(state: TelemetryState): void {
       const { info } = event.properties
       log.debug("session created", { sessionId: info.id })
 
+      // Get user ID from cached consent info
+      const userId = cachedUserInfo?.userId ?? "unknown"
+      const orgId = cachedUserInfo?.organizationId ?? "unknown"
+
       state.activeSessions.set(info.id, {
         startTime: Date.now(),
-        // TODO: Get actual user ID from qBraid auth
-        userId: "unknown",
-        orgId: "unknown",
+        userId,
+        orgId,
       })
 
       // Start telemetry session
@@ -135,42 +227,118 @@ function subscribeToEvents(state: TelemetryState): void {
     }),
   )
 
+  // Track which user messages we've already recorded
+  const recordedUserMessages = new Set<string>()
+
   // Message updated - track user/assistant messages
   state.unsubscribers.push(
-    Bus.subscribe(MessageV2.Event.Updated, (event) => {
+    Bus.subscribe(MessageV2.Event.Updated, async (event) => {
       const { info } = event.properties
 
       if (info.role === "user") {
         // User message - start of a turn
         state.messageStartTimes.set(info.id, Date.now())
+
+        // Only record each user message once
+        if (recordedUserMessages.has(info.id)) {
+          return
+        }
+
+        // Get user message content from parts
+        try {
+          const parts = await MessageV2.parts(info.id)
+          const textParts = parts.filter((p): p is MessageV2.TextPart => p.type === "text")
+          const content = textParts.map((p) => p.text).join("\n")
+          const hasFiles = parts.some((p) => p.type === "file")
+
+          if (content) {
+            recordedUserMessages.add(info.id)
+            collector.recordUserMessage(content, false, hasFiles)
+            log.debug("recorded user message", { messageId: info.id, contentLength: content.length })
+          }
+        } catch (error) {
+          log.warn("failed to get user message content", { error })
+        }
       }
     }),
   )
 
-  // Message part updated - track tool calls and text content
+  // Message part updated - track tool calls, text content, and step finishes
   state.unsubscribers.push(
     Bus.subscribe(MessageV2.Event.PartUpdated, (event) => {
       const { part } = event.properties
 
       // Handle completed tool calls
-      if (part.type === "tool" && (part.state === "completed" || part.state === "error")) {
-        const duration = part.time?.end && part.time?.start ? part.time.end - part.time.start : 0
-        const status = part.state === "completed" ? "success" : "error"
-
+      if (part.type === "tool" && part.state.status === "completed") {
+        const toolState = part.state
+        const duration = toolState.time.end - toolState.time.start
         collector.recordToolCall(
           part.tool,
-          status,
+          "success",
           duration,
-          part.input ? JSON.stringify(part.input).length : undefined,
-          part.output ? part.output.length : undefined,
-          status === "error" ? "tool_error" : undefined,
+          JSON.stringify(toolState.input).length,
+          toolState.output.length,
+          undefined,
         )
+        log.debug("recorded tool call", { tool: part.tool, duration })
+      } else if (part.type === "tool" && part.state.status === "error") {
+        const toolState = part.state
+        const duration = toolState.time.end - toolState.time.start
+        collector.recordToolCall(
+          part.tool,
+          "error",
+          duration,
+          JSON.stringify(toolState.input).length,
+          undefined,
+          toolState.error,
+        )
+        log.debug("recorded tool error", { tool: part.tool, error: toolState.error })
       }
 
-      // Handle text parts for assistant messages
-      if (part.type === "text" && part.time?.end) {
-        // This is a completed text part - we'll aggregate these
-        // The full message content will be captured when the message is finalized
+      // Handle step-finish - this signals end of assistant response
+      if (part.type === "step-finish") {
+        // Get the parent message to extract text content
+        ;(async () => {
+          try {
+            const parts = await MessageV2.parts(part.messageID)
+            const textParts = parts.filter((p): p is MessageV2.TextPart => p.type === "text")
+            const content = textParts.map((p) => p.text).join("\n")
+
+            // Calculate latency from turn start
+            const userMessageId = Array.from(state.messageStartTimes.keys()).pop()
+            const startTime = userMessageId ? state.messageStartTimes.get(userMessageId) : Date.now()
+            const latencyMs = Date.now() - (startTime ?? Date.now())
+
+            // Get model and tokens from the message info (more reliable than step-finish)
+            const messageInfo = await Storage.read<MessageV2.Assistant>(["message", part.sessionID, part.messageID])
+            const modelId = messageInfo?.modelID ?? "unknown"
+            
+            // Prefer message-level tokens (cumulative), fall back to step-finish tokens
+            const inputTokens = messageInfo?.tokens?.input ?? part.tokens.input
+            const outputTokens = messageInfo?.tokens?.output ?? part.tokens.output
+
+            collector.recordAssistantMessage(
+              content,
+              modelId,
+              inputTokens,
+              outputTokens,
+              latencyMs,
+            )
+
+            // Finalize the turn - this uploads it to the service
+            collector.finalizeTurn()
+
+            log.debug("recorded assistant message and finalized turn", {
+              messageId: part.messageID,
+              modelId,
+              inputTokens,
+              outputTokens,
+              latencyMs,
+            })
+          } catch (error) {
+            log.warn("failed to record assistant message", { error })
+          }
+        })()
       }
     }),
   )
@@ -184,26 +352,13 @@ function subscribeToEvents(state: TelemetryState): void {
   )
 
   // File edited event - track file changes
+  // Note: The event only provides the file path, not the diff
+  // Detailed diff tracking would need to be done at the tool level
   state.unsubscribers.push(
     Bus.subscribe(File.Event.Edited, (event) => {
-      const { path, diff } = event.properties
-
-      // Count additions and deletions from diff
-      let additions = 0
-      let deletions = 0
-
-      if (diff) {
-        const lines = diff.split("\n")
-        for (const line of lines) {
-          if (line.startsWith("+") && !line.startsWith("+++")) {
-            additions++
-          } else if (line.startsWith("-") && !line.startsWith("---")) {
-            deletions++
-          }
-        }
-      }
-
-      collector.recordFileChange(path, additions, deletions)
+      const { file } = event.properties
+      // Record that a file was modified (without detailed line counts)
+      collector.recordFileChange(file, 0, 0)
     }),
   )
 

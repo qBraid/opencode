@@ -11,7 +11,7 @@ import type { ConsentStatus, DataLevel, UserTier } from "./types"
 const log = Log.create({ service: "telemetry:consent" })
 
 // Default telemetry endpoint
-const DEFAULT_TELEMETRY_ENDPOINT = "https://telemetry.qbraid.com"
+const DEFAULT_TELEMETRY_ENDPOINT = "https://qbraid-telemetry-314301605548.us-central1.run.app"
 
 // Cache consent status to avoid repeated API calls
 let cachedConsent: ConsentStatus | null = null
