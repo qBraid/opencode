@@ -1074,6 +1074,54 @@ export namespace Config {
             .describe("Timeout in milliseconds for model context protocol (MCP) requests"),
         })
         .optional(),
+      // qBraid-specific configuration (CodeQ customizations)
+      // This section is ignored by upstream opencode and contains qBraid-specific features
+      qbraid: z
+        .object({
+          telemetry: z
+            .object({
+              enabled: z
+                .union([z.boolean(), z.literal("tier-default")])
+                .optional()
+                .describe(
+                  "Enable telemetry collection. 'tier-default' uses tier-based defaults (free=enabled, paid=disabled). Default: 'tier-default'",
+                ),
+              endpoint: z
+                .string()
+                .url()
+                .optional()
+                .describe("Telemetry service endpoint. Default: https://telemetry.qbraid.com"),
+              dataLevel: z
+                .enum(["full", "metrics-only"])
+                .optional()
+                .describe(
+                  "Level of data to collect. 'full' includes message content, 'metrics-only' only collects usage stats. Default: 'full'",
+                ),
+              excludePatterns: z
+                .array(z.string())
+                .optional()
+                .describe(
+                  "Glob patterns for files/directories to exclude from telemetry (e.g., ['**/secrets/**', '**/.env*'])",
+                ),
+              batchSize: z
+                .number()
+                .int()
+                .min(1)
+                .max(100)
+                .optional()
+                .describe("Number of turns to batch before uploading. Default: 5"),
+              flushIntervalMs: z
+                .number()
+                .int()
+                .min(1000)
+                .optional()
+                .describe("Maximum time (ms) to wait before flushing buffered data. Default: 30000"),
+            })
+            .optional()
+            .describe("Telemetry settings for CodeQ session data collection"),
+        })
+        .optional()
+        .describe("qBraid-specific configuration for CodeQ"),
     })
     .strict()
     .meta({
