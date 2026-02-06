@@ -3,6 +3,7 @@
 - The default branch in this repo is `dev`.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
+- This is a fork of `sst/opencode` (upstream). NEVER open PRs, push branches, or perform any write operations against the upstream repo. All PRs and pushes must target `origin` (`qBraid/opencode`) only. When using `gh pr create`, always pass `--repo qBraid/opencode` explicitly.
 
 ## Style Guide
 
