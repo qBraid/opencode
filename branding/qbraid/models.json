@@ -6,11 +6,11 @@
     "npm": "@ai-sdk/qbraid",
     "api": "https://account-v2.qbraid.com/api/ai/v1",
     "models": {
-      "claude-opus-4-5": {
-        "id": "claude-opus-4-5",
-        "name": "Claude 4.5 Opus",
+      "claude-opus-4-6": {
+        "id": "claude-opus-4-6",
+        "name": "Claude 4.6 Opus",
         "family": "claude-opus",
-        "release_date": "2025-11-24",
+        "release_date": "2026-02-06",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
