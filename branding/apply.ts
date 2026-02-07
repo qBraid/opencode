@@ -240,25 +240,21 @@ export const marks = "_^~"
   },
 
   // CLI UI logo() function - update to render Q in purple
+  // IMPORTANT: LOGO must be defined INSIDE the logo() function, not at module scope.
+  // The UI namespace compiles to an IIFE in the bundled binary, and module-scope
+  // const declarations are not accessible inside the IIFE.
   {
     pattern: "packages/opencode/src/cli/ui.ts",
     transform: (content, config) => {
       const logoStr = config.logo.cli.map((row) => `    [\`${row[0]}\`, \`${row[1]}\`],`).join("\n")
 
-      // Add LOGO constant and update logo() function to use it with purple Q
-      let result = content.replace(
-        /import \{ logo as glyphs \} from "\.\/logo"/,
-        `import { logo as glyphs } from "./logo"
-
-const LOGO = [
-${logoStr}
-  ]`
-      )
-
-      // Replace the logo() function to use LOGO with purple Q rendering
-      result = result.replace(
+      // Replace the logo() function with LOGO defined as a local constant inside it
+      const result = content.replace(
         /export function logo\(pad\?: string\) \{[\s\S]*?return result\.join\(""\)\.trimEnd\(\)\n  \}/,
         `export function logo(pad?: string) {
+    const LOGO = [
+${logoStr}
+    ]
     const result: string[] = []
     const reset = "\\x1b[0m"
     const left = {
