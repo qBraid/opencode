@@ -124,12 +124,12 @@ function buildReplacements(config: Branding): Replacement[] {
 
   // Product name replacements (case-sensitive)
   // Use negative lookbehind/lookahead to avoid matching:
-  // - @opencode-ai package names (not preceded by @)
-  // - Directory paths like /opencode/ or @gitlab/opencode (not preceded by /)
+  // - @opencode-ai package names
+  // - Directory paths like /opencode/ (but allow /bin/opencode at end of path)
   // - File extensions like opencode.json
   // - Third-party packages like @gitlab/opencode-gitlab-auth
   replacements.push({
-    search: /(?<!\/)(?<!@)opencode(?!-ai|\/|\.(json|ts|tsx|js)|-gitlab-auth)/g,
+    search: /(?<!@)(?<!\/opencode)opencode(?!-ai|\/|\.(json|ts|tsx|js)|-gitlab-auth)/g,
     replace: r.productName,
     description: `opencode -> ${r.productName}`,
   })
