@@ -221,33 +221,65 @@ interface FileTransform {
 }
 
 const FILE_TRANSFORMS: FileTransform[] = [
-  // CLI UI logo with purple Q
+  // CLI logo.ts - update the logo export
+  {
+    pattern: "packages/opencode/src/cli/logo.ts",
+    transform: (content, config) => {
+      // Replace the logo export with qbraid logo
+      const leftStr = config.logo.tui.left.map((l) => `"${l}"`).join(", ")
+      const rightStr = config.logo.tui.right.map((l) => `"${l}"`).join(", ")
+      
+      return `export const logo = {
+  left: [${leftStr}],
+  right: [${rightStr}],
+}
+
+export const marks = "_^~"
+`
+    },
+  },
+
+  // CLI UI logo() function - update to render Q in purple
   {
     pattern: "packages/opencode/src/cli/ui.ts",
     transform: (content, config) => {
       const logoStr = config.logo.cli.map((row) => `    [\`${row[0]}\`, \`${row[1]}\`],`).join("\n")
 
-      let result = content.replace(/const LOGO = \[\n[\s\S]*?\n  \]/, `const LOGO = [\n${logoStr}\n  ]`)
+      // Add LOGO constant and update logo() function to use it with purple Q
+      let result = content.replace(
+        /import \{ logo as glyphs \} from "\.\/logo"/,
+        `import { logo as glyphs } from "./logo"
 
-      // Replace the logo() function to render the Q in purple
-      // Purple ANSI: \x1b[35m (standard) or \x1b[38;2;147;112;219m (RGB for medium purple)
+const LOGO = [
+${logoStr}
+  ]`
+      )
+
+      // Replace the logo() function to use LOGO with purple Q rendering
       result = result.replace(
-        /export function logo\(pad\?: string\) \{[\s\S]*?\n  \}/,
+        /export function logo\(pad\?: string\) \{[\s\S]*?return result\.join\(""\)\.trimEnd\(\)\n  \}/,
         `export function logo(pad?: string) {
-    const PURPLE = "\\x1b[38;2;147;112;219m"  // Medium purple RGB
-    const result = []
+    const result: string[] = []
+    const reset = "\\x1b[0m"
+    const left = {
+      fg: Bun.color("gray", "ansi") ?? "",
+      shadow: "\\x1b[38;5;235m",
+      bg: "\\x1b[48;5;235m",
+    }
+    const PURPLE = "\\x1b[38;2;147;112;219m"  // Medium purple RGB for Q
+    
     for (const row of LOGO) {
       if (pad) result.push(pad)
-      result.push(Bun.color("gray", "ansi"))
+      result.push(left.fg)
       result.push(row[0])
-      result.push("\\x1b[0m")
-      result.push(PURPLE)  // Purple tint for the Q
+      result.push(reset)
+      result.push(PURPLE)  // Purple for the Q
       result.push(row[1])
-      result.push("\\x1b[0m")
+      result.push(reset)
       result.push(EOL)
     }
     return result.join("").trimEnd()
-  }`,
+  }`
       )
 
       return result
