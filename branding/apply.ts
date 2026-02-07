@@ -127,8 +127,9 @@ function buildReplacements(config: Branding): Replacement[] {
   // - @opencode-ai package names
   // - Directory paths like /opencode/ (but allow /bin/opencode at end of path)
   // - File extensions like opencode.json
+  // - Third-party packages like @gitlab/opencode-gitlab-auth
   replacements.push({
-    search: /(?<!@)(?<!\/opencode)opencode(?!-ai|\/|\.(json|ts|tsx|js))/g,
+    search: /(?<!@)(?<!\/opencode)opencode(?!-ai|\/|\.(json|ts|tsx|js)|-gitlab-auth)/g,
     replace: r.productName,
     description: `opencode -> ${r.productName}`,
   })
