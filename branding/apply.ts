@@ -342,14 +342,14 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     },
   },
 
-  // Model provider configuration (remove Zen, add qBraid)
-  // This replaces the entire models.ts to use embedded models
+  // Model provider configuration
+  // When exclusive=true: replace get() to return only embedded models (original behavior)
+  // When default=true, exclusive=false: prepend branded models to the models.dev response
   {
     pattern: "packages/opencode/src/provider/models.ts",
     transform: async (content, config) => {
-      if (!config.models?.exclusive || !config.models?.source) return content
+      if (!config.models?.source) return content
 
-      // Read the models JSON
       const modelsPath = path.join(BRAND_DIR, config.models.source.replace("./", ""))
       const modelsFile = Bun.file(modelsPath)
       if (!(await modelsFile.exists())) {
@@ -358,16 +358,53 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
       }
 
       const modelsJson = await modelsFile.json()
-      // Remove schema and comment keys
       delete modelsJson.$schema
       delete modelsJson._comment
 
-      // Replace the get() function with one that returns embedded models directly
+      if (config.models.exclusive) {
+        // Exclusive mode: only branded models, no models.dev fetch
+        return content.replace(
+          /export async function get\(\) \{[\s\S]*?\n  \}/,
+          `export async function get() {
+    // Branding: embedded models (exclusive mode, no external fetch)
+    return ${JSON.stringify(modelsJson)} as Record<string, Provider>
+  }`,
+        )
+      }
+
+      // Default mode: prepend branded models, then merge models.dev data
+      // This ensures qBraid models appear first and are the defaults,
+      // while all upstream providers (Anthropic, OpenAI, Copilot, Codex, etc.)
+      // remain available.
+      const brandedModelsStr = JSON.stringify(modelsJson)
       return content.replace(
         /export async function get\(\) \{[\s\S]*?\n  \}/,
         `export async function get() {
-    // Branding: embedded models (no external fetch)
-    return ${JSON.stringify(modelsJson)} as Record<string, Provider>
+    // Branding: qBraid models prepended as defaults
+    const branded = ${brandedModelsStr} as Record<string, Provider>
+
+    // Fetch upstream models from models.dev (or cache)
+    let upstream: Record<string, Provider> = {}
+    try {
+      const cached = await readCache()
+      if (cached) {
+        upstream = cached
+      } else {
+        const response = await fetch(url)
+        if (response.ok) {
+          upstream = await response.json() as Record<string, Provider>
+          await writeCache(upstream)
+        }
+      }
+    } catch (e) {
+      // Fall back to bundled snapshot if fetch fails
+      try {
+        upstream = (await import("./models-snapshot")).default as Record<string, Provider>
+      } catch {}
+    }
+
+    // Merge: branded providers first, then upstream (branded wins on conflict)
+    return { ...upstream, ...branded }
   }`,
       )
     },
@@ -386,14 +423,14 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     },
   },
 
-  // Remove builtin plugins (they don't exist for qBraid branding)
+  // Remove builtin plugins only in exclusive mode.
+  // In default mode (exclusive=false), keep plugins so Anthropic auth,
+  // Codex OAuth, Copilot device code, etc. continue to work.
   {
     pattern: "packages/opencode/src/plugin/index.ts",
     transform: (content, config) => {
       if (!config.models?.exclusive) return content
 
-      // Clear the BUILTIN array - these npm packages don't exist for branded versions
-      // Match the array with its contents across potential newlines
       return content.replace(
         /const BUILTIN = \["[^"]*"(?:,\s*"[^"]*")*\]/,
         "const BUILTIN: string[] = [] // Cleared by branding - no external plugins",
@@ -401,17 +438,14 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     },
   },
 
-  // Remove custom loaders for providers that don't exist in exclusive models
+  // Remove custom loaders only in exclusive mode.
+  // In default mode, keep all loaders — they're needed for native provider support
+  // (Anthropic, OpenAI, Bedrock, Copilot, etc.).
   {
     pattern: "packages/opencode/src/provider/provider.ts",
     transform: (content, config) => {
       if (!config.models?.exclusive) return content
 
-      // Comment out all custom loaders when in exclusive mode
-      // This prevents "Provider does not exist in model list" errors
-      // Match the CUSTOM_LOADERS object definition and replace with empty object
-      // The object starts at "const CUSTOM_LOADERS: Record<string, CustomLoader> = {"
-      // and ends with "  }" before "export const Model"
       return content.replace(
         /const CUSTOM_LOADERS: Record<string, CustomLoader> = \{[\s\S]*?\n  \}(?=\n\n  export const Model)/,
         `const CUSTOM_LOADERS: Record<string, CustomLoader> = {

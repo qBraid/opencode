@@ -29,7 +29,8 @@
     }
   },
   "models": {
-    "exclusive": true,
+    "default": true,
+    "exclusive": false,
     "removeProviders": ["opencode"],
     "source": "./models.json"
   },
