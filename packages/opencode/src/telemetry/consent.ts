@@ -1,34 +1,28 @@
 /**
  * Telemetry Consent
  *
- * Manages user consent for telemetry collection based on tier and preferences.
+ * Manages user consent for telemetry based on tier, local preferences, and
+ * the remote consent service. Defaults to OFF unless explicitly enabled by
+ * the user through the first-run dialog or config.
  */
 
 import { Log } from "../util/log"
 import { Config } from "../config/config"
+import { Flag } from "../flag/flag"
 import type { ConsentStatus, DataLevel, UserTier } from "./types"
 
 const log = Log.create({ service: "telemetry:consent" })
 
-// Default telemetry endpoint
 const DEFAULT_TELEMETRY_ENDPOINT = "https://qbraid-telemetry-314301605548.us-central1.run.app"
 
-// Cache consent status to avoid repeated API calls
 let cachedConsent: ConsentStatus | null = null
 let cacheExpiry: number = 0
 const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
-/**
- * Get the telemetry endpoint from config or default
- */
 export function getTelemetryEndpoint(): string {
-  // This will be called after config is loaded
   return DEFAULT_TELEMETRY_ENDPOINT
 }
 
-/**
- * Fetch consent status from the telemetry service
- */
 async function fetchConsentFromService(
   endpoint: string,
   authToken: string,
@@ -47,8 +41,7 @@ async function fetchConsentFromService(
       return null
     }
 
-    const data = (await response.json()) as ConsentStatus
-    return data
+    return (await response.json()) as ConsentStatus
   } catch (error) {
     log.error("error fetching consent status", { error })
     return null
@@ -56,114 +49,101 @@ async function fetchConsentFromService(
 }
 
 /**
- * Get the default consent based on config settings
+ * Local consent value read from the KV store file.
+ * Set by the first-run dialog or the `Telemetry.setLocalConsent()` API.
+ * `null` means no local decision has been recorded yet.
  */
-function getDefaultConsent(config: Config.Info, userId: string): ConsentStatus {
-  const qbraidConfig = config.qbraid?.telemetry
+let localConsent: boolean | null = null
 
-  // Default tier assumption for local config
-  const tier: UserTier = "free"
-
-  // Determine if telemetry is enabled
-  let telemetryEnabled: boolean
-  if (qbraidConfig?.enabled === true) {
-    telemetryEnabled = true
-  } else if (qbraidConfig?.enabled === false) {
-    telemetryEnabled = false
-  } else {
-    // "tier-default" or undefined - use tier-based defaults
-    telemetryEnabled = tier === "free" // Only enabled by default for free tier
-  }
-
-  // Determine data level
-  const dataLevel: DataLevel = qbraidConfig?.dataLevel ?? "full"
-
-  return {
-    userId,
-    tier,
-    telemetryEnabled,
-    dataLevel,
-  }
+/**
+ * Set the local consent value (called by the TUI consent dialog).
+ */
+export function setLocalConsent(enabled: boolean): void {
+  localConsent = enabled
 }
 
 /**
- * Get the current consent status for the user
+ * Load local consent from the KV store file if available.
+ * This is called once during initialization.
+ */
+export function loadLocalConsent(value: boolean | null): void {
+  localConsent = value
+}
+
+/**
+ * Get the current consent status.
  *
- * This checks:
- * 1. Local config overrides (qbraid.telemetry.enabled)
- * 2. Cached consent from service
- * 3. Fresh consent from telemetry service
- * 4. Falls back to tier-based defaults
+ * Priority order:
+ * 1. CODEQ_DISABLE_TELEMETRY env var — always wins
+ * 2. Config `qbraid.telemetry.enabled` — explicit config override
+ * 3. Remote consent service (for authenticated users)
+ * 4. Local consent from first-run dialog (KV store)
+ * 5. Default: OFF (telemetry is opt-in until the user makes a choice)
  */
 export async function getConsentStatus(authToken?: string): Promise<ConsentStatus> {
   const config = await Config.get()
   const qbraidConfig = config.qbraid?.telemetry
-
-  // Get user ID from somewhere (placeholder - needs integration with qBraid auth)
   const userId = "unknown"
 
-  // If config explicitly disables telemetry, respect that
+  // 1. Env var kill switch
+  if (Flag.CODEQ_DISABLE_TELEMETRY) {
+    return { userId, tier: "standard", telemetryEnabled: false, dataLevel: "metrics-only" }
+  }
+
+  // 2. Explicit config override
   if (qbraidConfig?.enabled === false) {
-    log.debug("telemetry disabled by config")
+    return { userId, tier: "standard", telemetryEnabled: false, dataLevel: "metrics-only" }
+  }
+
+  if (qbraidConfig?.enabled === true) {
     return {
       userId,
-      tier: "standard", // Assume paid tier if they can configure
-      telemetryEnabled: false,
-      dataLevel: "metrics-only",
+      tier: "standard",
+      telemetryEnabled: true,
+      dataLevel: qbraidConfig.dataLevel ?? "full",
     }
   }
 
-  // Try to get from service if we have an auth token
+  // 3. Remote consent service (authenticated users)
   if (authToken) {
-    // Check cache first
-    if (cachedConsent && Date.now() < cacheExpiry) {
-      return cachedConsent
-    }
+    if (cachedConsent && Date.now() < cacheExpiry) return cachedConsent
 
-    // Fetch from service
     const endpoint = qbraidConfig?.endpoint ?? getTelemetryEndpoint()
     const serviceConsent = await fetchConsentFromService(endpoint, authToken)
 
     if (serviceConsent) {
-      // Apply local config overrides
-      if (qbraidConfig?.enabled === true) {
-        serviceConsent.telemetryEnabled = true
-      }
-      if (qbraidConfig?.dataLevel) {
-        serviceConsent.dataLevel = qbraidConfig.dataLevel
-      }
+      if (qbraidConfig?.dataLevel) serviceConsent.dataLevel = qbraidConfig.dataLevel
 
-      // Cache the result
       cachedConsent = serviceConsent
       cacheExpiry = Date.now() + CACHE_TTL_MS
-
       return serviceConsent
     }
   }
 
-  // Fall back to config-based defaults
-  return getDefaultConsent(config, userId)
+  // 4. Local consent from first-run dialog
+  if (localConsent !== null) {
+    return {
+      userId,
+      tier: "free",
+      telemetryEnabled: localConsent,
+      dataLevel: qbraidConfig?.dataLevel ?? "full",
+    }
+  }
+
+  // 5. Default: OFF until user makes a choice
+  return { userId, tier: "free", telemetryEnabled: false, dataLevel: "metrics-only" }
 }
 
-/**
- * Check if telemetry is currently enabled
- */
 export async function isTelemetryEnabled(authToken?: string): Promise<boolean> {
   const consent = await getConsentStatus(authToken)
   return consent.telemetryEnabled
 }
 
-/**
- * Get the data collection level
- */
 export async function getDataLevel(authToken?: string): Promise<DataLevel> {
   const consent = await getConsentStatus(authToken)
   return consent.dataLevel
 }
 
-/**
- * Clear the consent cache (useful for testing or when user changes settings)
- */
 export function clearConsentCache(): void {
   cachedConsent = null
   cacheExpiry = 0

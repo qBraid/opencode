@@ -1,8 +1,8 @@
 /**
  * Telemetry Integration
  *
- * Integrates the telemetry system with CodeQ's Event Bus.
- * This module subscribes to relevant events and feeds data to the collector.
+ * Subscribes to the Event Bus to automatically feed data to the collector.
+ * Uses Instance.state for cleanup and per-instance isolation.
  */
 
 import { Bus } from "../bus"
@@ -13,7 +13,6 @@ import { File } from "../file"
 import { Log } from "../util/log"
 import { Auth } from "../auth"
 import { Instance } from "../project/instance"
-import { Storage } from "../storage/storage"
 import { getCollector, initializeTelemetry, shutdownTelemetry } from "./collector"
 import path from "path"
 import os from "os"
@@ -22,84 +21,64 @@ import fs from "fs/promises"
 const log = Log.create({ service: "telemetry:integration" })
 
 /**
- * Telemetry state managed by Instance.state for automatic cleanup
+ * Per-instance telemetry tracking state
  */
 interface TelemetryState {
-  activeSessions: Map<string, { startTime: number; userId?: string; orgId?: string }>
-  messageStartTimes: Map<string, number>
+  activeSessions: Map<string, { startTime: number; userId: string; orgId: string }>
+  /** Maps user messageID -> timestamp for latency calculation */
+  turnStartTimes: Map<string, number>
+  /** Maps assistant messageID -> parent user messageID */
+  assistantToUser: Map<string, string>
   unsubscribers: (() => void)[]
   initialized: boolean
 }
 
-/**
- * Get or create telemetry state with automatic disposal on instance cleanup
- */
 const getTelemetryState = Instance.state<TelemetryState>(
   () => ({
     activeSessions: new Map(),
-    messageStartTimes: new Map(),
+    turnStartTimes: new Map(),
+    assistantToUser: new Map(),
     unsubscribers: [],
     initialized: false,
   }),
   async (state) => {
-    // Dispose handler - called when Instance.dispose() is invoked
     log.info("disposing telemetry state")
-
-    // Unsubscribe from all events
-    for (const unsub of state.unsubscribers) {
-      unsub()
-    }
-
-    // Shutdown telemetry (flushes pending data)
+    for (const unsub of state.unsubscribers) unsub()
     await shutdownTelemetry()
-
-    // Clear tracking maps
     state.activeSessions.clear()
-    state.messageStartTimes.clear()
+    state.turnStartTimes.clear()
+    state.assistantToUser.clear()
     state.unsubscribers = []
-
     log.info("telemetry disposed")
   },
 )
 
+// Cached user info from consent endpoint
+let cachedUserInfo: { userId: string; organizationId?: string } | null = null
+
 /**
- * Get qBraid API key from config or environment
+ * Read qBraid API key from env, config, or ~/.qbraid/qbraidrc
  */
 async function getQBraidApiKey(): Promise<string | undefined> {
-  // Try environment variable first
-  if (process.env.QBRAID_API_KEY) {
-    return process.env.QBRAID_API_KEY
-  }
+  if (process.env.QBRAID_API_KEY) return process.env.QBRAID_API_KEY
 
-  // Try to get from CodeQ config (provider.qbraid.options.apiKey)
   try {
     const { Config } = await import("../config/config")
     const config = await Config.get()
     const apiKey = config.provider?.qbraid?.options?.apiKey
-    if (apiKey && typeof apiKey === "string") {
-      return apiKey
-    }
-  } catch (error) {
+    if (apiKey && typeof apiKey === "string") return apiKey
+  } catch {
     log.debug("could not read qbraid api key from config")
   }
 
-  // Fall back to ~/.qbraid/qbraidrc file
   try {
     const qbraidrcPath = path.join(os.homedir(), ".qbraid", "qbraidrc")
     const content = await fs.readFile(qbraidrcPath, "utf-8")
-
-    // Parse INI-style config
     for (const line of content.split("\n")) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith("api-key")) {
-        const match = trimmed.match(/api-key\s*=\s*(.+)/)
-        if (match) {
-          return match[1].trim()
-        }
-      }
+      const match = line.trim().match(/^api-key\s*=\s*(.+)/)
+      if (match) return match[1].trim()
     }
-  } catch (error) {
-    // File doesn't exist or can't be read
+  } catch {
     log.debug("no qbraidrc file found")
   }
 
@@ -111,45 +90,39 @@ async function getQBraidApiKey(): Promise<string | undefined> {
  */
 export async function initTelemetryIntegration(): Promise<void> {
   const state = getTelemetryState()
-
-  // Avoid double initialization
   if (state.initialized) {
     log.debug("telemetry already initialized")
     return
   }
 
-  // Get auth token if available
   let authToken: string | undefined
 
-  // First try to get from CodeQ auth system
+  // Try CodeQ auth system first
   try {
     const authData = await Auth.all()
-    // Find qBraid auth if available
     for (const [key, value] of Object.entries(authData)) {
       if (key.includes("qbraid") && value.type === "wellknown" && value.token) {
         authToken = value.token
         break
       }
     }
-  } catch (error) {
+  } catch {
     log.debug("no auth token in codeq auth system")
   }
 
-  // Fall back to qBraid API key from config or qbraidrc
+  // Fall back to qBraid API key
   if (!authToken) {
     authToken = await getQBraidApiKey()
-    if (authToken) {
-      log.debug("using qbraid api key for telemetry")
-    }
+    if (authToken) log.debug("using qbraid api key for telemetry")
   }
 
-  // Fetch user info from consent endpoint before initializing
+  // Fetch user info from consent endpoint
   if (authToken) {
     try {
       const { Config } = await import("../config/config")
       const config = await Config.get()
       const endpoint = config.qbraid?.telemetry?.endpoint ?? "https://qbraid-telemetry-314301605548.us-central1.run.app"
-      
+
       const response = await fetch(`${endpoint}/api/v1/consent`, {
         method: "GET",
         headers: {
@@ -157,69 +130,54 @@ export async function initTelemetryIntegration(): Promise<void> {
           "Content-Type": "application/json",
         },
       })
-      
+
       if (response.ok) {
-        const consentData = await response.json() as { userId: string; organizationId?: string }
-        cachedUserInfo = {
-          userId: consentData.userId,
-          organizationId: consentData.organizationId,
-        }
-        log.debug("fetched user info for telemetry", { userId: consentData.userId })
+        const data = await response.json() as { userId: string; organizationId?: string }
+        cachedUserInfo = { userId: data.userId, organizationId: data.organizationId }
+        log.debug("fetched user info for telemetry", { userId: data.userId })
       }
     } catch (error) {
       log.warn("failed to fetch user info for telemetry", { error })
     }
   }
 
-  // Initialize the telemetry system
   await initializeTelemetry(authToken)
-
-  // Subscribe to session events
   subscribeToEvents(state)
-
   state.initialized = true
+
+  // Flush pending data on process exit
+  const flushOnExit = () => {
+    shutdownTelemetry().catch(() => {})
+  }
+  process.once("SIGTERM", flushOnExit)
+  process.once("beforeExit", flushOnExit)
+
   log.info("telemetry integration initialized")
 }
 
-// Store user info from consent endpoint
-let cachedUserInfo: { userId: string; organizationId?: string } | null = null
-
 /**
- * Subscribe to all relevant events
+ * Subscribe to Bus events and feed data to the collector.
  */
 function subscribeToEvents(state: TelemetryState): void {
   const collector = getCollector()
 
-  // Session created - start tracking
+  // --- Session lifecycle ---
+
   state.unsubscribers.push(
     Bus.subscribe(Session.Event.Created, async (event) => {
       const { info } = event.properties
-      log.debug("session created", { sessionId: info.id })
-
-      // Get user ID from cached consent info
       const userId = cachedUserInfo?.userId ?? "unknown"
       const orgId = cachedUserInfo?.organizationId ?? "unknown"
 
-      state.activeSessions.set(info.id, {
-        startTime: Date.now(),
-        userId,
-        orgId,
-      })
-
-      // Start telemetry session
-      const sessionData = state.activeSessions.get(info.id)
-      if (sessionData) {
-        await collector.startSession(info.id, sessionData.userId ?? "unknown", sessionData.orgId ?? "unknown")
-      }
+      state.activeSessions.set(info.id, { startTime: Date.now(), userId, orgId })
+      await collector.startSession(info.id, userId, orgId)
+      log.debug("session tracking started", { sessionId: info.id })
     }),
   )
 
-  // Session deleted - end tracking
   state.unsubscribers.push(
     Bus.subscribe(Session.Event.Deleted, async (event) => {
       const { info } = event.properties
-      log.debug("session deleted", { sessionId: info.id })
-
       if (state.activeSessions.has(info.id)) {
         await collector.endSession(true)
         state.activeSessions.delete(info.id)
@@ -227,150 +185,170 @@ function subscribeToEvents(state: TelemetryState): void {
     }),
   )
 
-  // Track which user messages we've already recorded
+  // --- User messages ---
+  // We record user messages when we see a text part on a user message.
+  // MessageV2.Event.PartUpdated fires *after* the part is written to storage,
+  // avoiding the race where MessageV2.Event.Updated fires before parts exist.
+
   const recordedUserMessages = new Set<string>()
 
-  // Message updated - track user/assistant messages
+  state.unsubscribers.push(
+    Bus.subscribe(MessageV2.Event.PartUpdated, (event) => {
+      const { part } = event.properties
+
+      // Record user message text parts (deduped per message)
+      if (part.type === "text" && !recordedUserMessages.has(part.messageID)) {
+        // Check if this part belongs to a user message by looking up the message
+        // We defer this to the Updated event for user messages to avoid extra reads
+      }
+
+      // Handle completed tool calls
+      if (part.type === "tool" && part.state.status === "completed") {
+        const duration = part.state.time.end - part.state.time.start
+        collector.recordToolCall(
+          part.tool,
+          "success",
+          duration,
+          JSON.stringify(part.state.input).length,
+          part.state.output.length,
+          undefined,
+        )
+      } else if (part.type === "tool" && part.state.status === "error") {
+        const duration = part.state.time.end - part.state.time.start
+        collector.recordToolCall(
+          part.tool,
+          "error",
+          duration,
+          JSON.stringify(part.state.input).length,
+          undefined,
+          part.state.error,
+        )
+      }
+    }),
+  )
+
+  // --- Message updated: captures user messages and assistant completion ---
+
   state.unsubscribers.push(
     Bus.subscribe(MessageV2.Event.Updated, async (event) => {
       const { info } = event.properties
 
       if (info.role === "user") {
-        // User message - start of a turn
-        state.messageStartTimes.set(info.id, Date.now())
+        // Record the turn start time
+        state.turnStartTimes.set(info.id, Date.now())
 
-        // Only record each user message once
-        if (recordedUserMessages.has(info.id)) {
-          return
+        // Only record content once per message
+        if (recordedUserMessages.has(info.id)) return
+        recordedUserMessages.add(info.id)
+
+        // Read parts — by the time Updated fires for a user message on subsequent
+        // updates (e.g. when the assistant starts), parts should be available.
+        // We retry once after a short delay as a safety net.
+        let content = ""
+        let hasFiles = false
+        try {
+          const parts = await MessageV2.parts(info.id)
+          const textParts = parts.filter((p): p is MessageV2.TextPart => p.type === "text")
+          content = textParts.map((p) => p.text).join("\n")
+          hasFiles = parts.some((p) => p.type === "file")
+        } catch {
+          // Parts may not be written yet on the very first Updated event.
+          // Re-try after a short delay.
+          await new Promise((r) => setTimeout(r, 50))
+          try {
+            const parts = await MessageV2.parts(info.id)
+            const textParts = parts.filter((p): p is MessageV2.TextPart => p.type === "text")
+            content = textParts.map((p) => p.text).join("\n")
+            hasFiles = parts.some((p) => p.type === "file")
+          } catch (error) {
+            log.warn("failed to get user message parts after retry", { error })
+          }
         }
 
-        // Get user message content from parts
+        if (content) {
+          collector.recordUserMessage(content, false, hasFiles)
+          log.debug("recorded user message", { messageId: info.id, len: content.length })
+        }
+      }
+
+      // Assistant message with time.completed set means the processor is done
+      // with this message. This fires exactly once per full response cycle.
+      if (info.role === "assistant" && info.time?.completed) {
+        // Guard against duplicate finalization
+        if (collector.hasFinalized(info.id)) return
+
         try {
           const parts = await MessageV2.parts(info.id)
           const textParts = parts.filter((p): p is MessageV2.TextPart => p.type === "text")
           const content = textParts.map((p) => p.text).join("\n")
-          const hasFiles = parts.some((p) => p.type === "file")
 
-          if (content) {
-            recordedUserMessages.add(info.id)
-            collector.recordUserMessage(content, false, hasFiles)
-            log.debug("recorded user message", { messageId: info.id, contentLength: content.length })
+          // Find the user message that started this turn.
+          // The most recent entry in turnStartTimes is the current turn's user message.
+          let startTime = Date.now()
+          const entries = Array.from(state.turnStartTimes.entries())
+          if (entries.length > 0) {
+            const last = entries[entries.length - 1]
+            startTime = last[1]
+            // Clean up old entries to prevent unbounded growth
+            state.turnStartTimes.delete(last[0])
           }
+
+          const latencyMs = Date.now() - startTime
+          const modelId = info.modelID ?? "unknown"
+          const inputTokens = info.tokens?.input ?? 0
+          const outputTokens = info.tokens?.output ?? 0
+
+          collector.recordAssistantMessage(content, modelId, inputTokens, outputTokens, latencyMs)
+          collector.finalizeTurn(info.id)
+
+          log.debug("finalized turn", {
+            messageId: info.id,
+            modelId,
+            inputTokens,
+            outputTokens,
+            latencyMs,
+          })
         } catch (error) {
-          log.warn("failed to get user message content", { error })
+          log.warn("failed to finalize turn", { error })
         }
       }
     }),
   )
 
-  // Message part updated - track tool calls, text content, and step finishes
+  // --- Compaction ---
+
   state.unsubscribers.push(
-    Bus.subscribe(MessageV2.Event.PartUpdated, (event) => {
-      const { part } = event.properties
-
-      // Handle completed tool calls
-      if (part.type === "tool" && part.state.status === "completed") {
-        const toolState = part.state
-        const duration = toolState.time.end - toolState.time.start
-        collector.recordToolCall(
-          part.tool,
-          "success",
-          duration,
-          JSON.stringify(toolState.input).length,
-          toolState.output.length,
-          undefined,
-        )
-        log.debug("recorded tool call", { tool: part.tool, duration })
-      } else if (part.type === "tool" && part.state.status === "error") {
-        const toolState = part.state
-        const duration = toolState.time.end - toolState.time.start
-        collector.recordToolCall(
-          part.tool,
-          "error",
-          duration,
-          JSON.stringify(toolState.input).length,
-          undefined,
-          toolState.error,
-        )
-        log.debug("recorded tool error", { tool: part.tool, error: toolState.error })
-      }
-
-      // Handle step-finish - this signals end of assistant response
-      if (part.type === "step-finish") {
-        // Get the parent message to extract text content
-        ;(async () => {
-          try {
-            const parts = await MessageV2.parts(part.messageID)
-            const textParts = parts.filter((p): p is MessageV2.TextPart => p.type === "text")
-            const content = textParts.map((p) => p.text).join("\n")
-
-            // Calculate latency from turn start
-            const userMessageId = Array.from(state.messageStartTimes.keys()).pop()
-            const startTime = userMessageId ? state.messageStartTimes.get(userMessageId) : Date.now()
-            const latencyMs = Date.now() - (startTime ?? Date.now())
-
-            // Get model and tokens from the message info (more reliable than step-finish)
-            const messageInfo = await Storage.read<MessageV2.Assistant>(["message", part.sessionID, part.messageID])
-            const modelId = messageInfo?.modelID ?? "unknown"
-            
-            // Prefer message-level tokens (cumulative), fall back to step-finish tokens
-            const inputTokens = messageInfo?.tokens?.input ?? part.tokens.input
-            const outputTokens = messageInfo?.tokens?.output ?? part.tokens.output
-
-            collector.recordAssistantMessage(
-              content,
-              modelId,
-              inputTokens,
-              outputTokens,
-              latencyMs,
-            )
-
-            // Finalize the turn - this uploads it to the service
-            collector.finalizeTurn()
-
-            log.debug("recorded assistant message and finalized turn", {
-              messageId: part.messageID,
-              modelId,
-              inputTokens,
-              outputTokens,
-              latencyMs,
-            })
-          } catch (error) {
-            log.warn("failed to record assistant message", { error })
-          }
-        })()
-      }
-    }),
-  )
-
-  // Compaction event
-  state.unsubscribers.push(
-    Bus.subscribe(SessionCompaction.Event.Compacted, (event) => {
-      log.debug("compaction occurred", { sessionId: event.properties.sessionID })
+    Bus.subscribe(SessionCompaction.Event.Compacted, () => {
       collector.recordCompaction()
     }),
   )
 
-  // File edited event - track file changes
-  // Note: The event only provides the file path, not the diff
-  // Detailed diff tracking would need to be done at the tool level
+  // --- File edits ---
+
   state.unsubscribers.push(
     Bus.subscribe(File.Event.Edited, (event) => {
-      const { file } = event.properties
-      // Record that a file was modified (without detailed line counts)
-      collector.recordFileChange(file, 0, 0)
+      collector.recordFileChange(event.properties.file, 0, 0)
     }),
   )
 
-  // Session error event
+  // --- Session diff (for line-level change data) ---
+
+  state.unsubscribers.push(
+    Bus.subscribe(Session.Event.Diff, (event) => {
+      for (const diff of event.properties.diff) {
+        if (diff.additions > 0 || diff.deletions > 0) {
+          collector.recordFileChange(diff.file, diff.additions, diff.deletions)
+        }
+      }
+    }),
+  )
+
+  // --- Session errors ---
+
   state.unsubscribers.push(
     Bus.subscribe(Session.Event.Error, (event) => {
-      const { error } = event.properties
-      if (error) {
-        // Record error in signals
-        const collector = getCollector()
-        // The collector tracks errors internally via recordToolCall with error status
-        log.debug("session error", { error: error.name })
+      if (event.properties.error) {
+        log.debug("session error", { error: event.properties.error.name })
       }
     }),
   )
@@ -379,68 +357,44 @@ function subscribeToEvents(state: TelemetryState): void {
 }
 
 /**
- * Finalize a turn when assistant response is complete
- *
- * Called from the session processor when a message is fully processed.
+ * Finalize a turn manually (for non-Event-Bus callers).
  */
 export function finalizeTurn(
-  sessionId: string,
+  _sessionId: string,
   assistantContent: string,
   modelId: string,
   tokens: { input: number; output: number },
   startTime?: number,
 ): void {
   const collector = getCollector()
-
-  // Calculate latency
   const latencyMs = startTime ? Date.now() - startTime : 0
-
-  // Record the assistant message
   collector.recordAssistantMessage(assistantContent, modelId, tokens.input, tokens.output, latencyMs)
 }
 
-/**
- * Record that a user message was sent
- */
 export function recordUserTurn(content: string, hasImages = false, hasFiles = false): void {
-  const collector = getCollector()
-  collector.recordUserMessage(content, hasImages, hasFiles)
+  getCollector().recordUserMessage(content, hasImages, hasFiles)
 }
 
-/**
- * Record that a turn was retried
- */
 export function recordRetry(): void {
-  const collector = getCollector()
-  collector.recordRetry()
+  getCollector().recordRetry()
 }
 
 /**
- * Shutdown telemetry and unsubscribe from events
- *
- * Note: This is normally handled automatically by Instance.dispose()
- * via the state disposal mechanism. This function is provided for
- * explicit shutdown in non-standard scenarios.
+ * Shutdown telemetry integration explicitly.
+ * Normally handled automatically by Instance.dispose() via state disposal.
  */
 export async function shutdownTelemetryIntegration(): Promise<void> {
   const state = getTelemetryState()
+  if (!state.initialized) return
 
-  if (!state.initialized) {
-    return
-  }
-
-  // Unsubscribe from all events
-  for (const unsub of state.unsubscribers) {
-    unsub()
-  }
+  for (const unsub of state.unsubscribers) unsub()
   state.unsubscribers = []
 
-  // Shutdown telemetry (flushes pending data)
   await shutdownTelemetry()
 
-  // Clear tracking maps
   state.activeSessions.clear()
-  state.messageStartTimes.clear()
+  state.turnStartTimes.clear()
+  state.assistantToUser.clear()
   state.initialized = false
 
   log.info("telemetry integration shutdown")

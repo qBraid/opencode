@@ -1,18 +1,18 @@
 /**
  * Telemetry Collector
  *
- * Main module that collects session telemetry by subscribing to the Event Bus.
- * Aggregates data and coordinates with sanitizer, signals, and uploader modules.
+ * Collects session telemetry per-instance. Uses Instance.state so each project
+ * context gets its own collector that is disposed when the instance shuts down.
  */
 
 import { Log } from "../util/log"
 import { Config } from "../config/config"
-import { createSanitizer, hashFilePath, getFileExtension } from "./sanitizer"
+import { Instance } from "../project/instance"
+import { createSanitizer } from "./sanitizer"
 import { createSignalTracker, type SignalTracker } from "./signals"
 import { createUploader, type TelemetryUploader } from "./uploader"
 import { getConsentStatus, getTelemetryEndpoint } from "./consent"
 import type {
-  AssistantMessageData,
   Environment,
   FileChangeData,
   ModelUsage,
@@ -20,12 +20,10 @@ import type {
   TelemetrySession,
   TelemetryTurn,
   ToolCallData,
-  UserMessageData,
 } from "./types"
 
 const log = Log.create({ service: "telemetry:collector" })
 
-// Package version (injected at build time or read from package.json)
 const CODEQ_VERSION = process.env.npm_package_version ?? "0.0.0"
 
 /**
@@ -41,10 +39,12 @@ interface SessionState {
   modelUsage: ModelUsage
   currentTurnIndex: number
   currentTurn: Partial<TelemetryTurn> | null
+  /** Tracks which assistant messageIDs have already been finalized */
+  finalizedMessages: Set<string>
 }
 
 /**
- * Telemetry collector instance
+ * Telemetry collector — one per Instance (project context)
  */
 export class TelemetryCollector {
   private uploader: TelemetryUploader | null = null
@@ -53,20 +53,16 @@ export class TelemetryCollector {
   private sessionState: SessionState | null = null
   private isEnabled = false
   private authToken: string | null = null
-  private unsubscribers: (() => void)[] = []
+  private dataLevel: "full" | "metrics-only" = "full"
 
   constructor() {
     this.signalTracker = createSignalTracker()
     this.sanitizer = createSanitizer()
   }
 
-  /**
-   * Initialize the collector
-   */
   async initialize(authToken?: string): Promise<void> {
     this.authToken = authToken ?? null
 
-    // Check consent
     const consent = await getConsentStatus(authToken)
 
     if (!consent.telemetryEnabled) {
@@ -75,18 +71,17 @@ export class TelemetryCollector {
       return
     }
 
-    // Get config
+    this.dataLevel = consent.dataLevel
+
     const config = await Config.get()
     const telemetryConfig = config.qbraid?.telemetry
 
-    // Update sanitizer with exclude patterns from config
     if (telemetryConfig?.excludePatterns) {
       this.sanitizer = createSanitizer({
         excludePatterns: telemetryConfig.excludePatterns,
       })
     }
 
-    // Create uploader
     const endpoint = telemetryConfig?.endpoint ?? getTelemetryEndpoint()
 
     if (authToken) {
@@ -100,14 +95,8 @@ export class TelemetryCollector {
 
     this.isEnabled = true
     log.info("telemetry initialized", { endpoint, dataLevel: consent.dataLevel })
-
-    // Subscribe to events
-    this.subscribeToEvents()
   }
 
-  /**
-   * Start collecting for a new session
-   */
   async startSession(sessionId: string, userId: string, organizationId: string): Promise<void> {
     if (!this.isEnabled) return
 
@@ -133,11 +122,11 @@ export class TelemetryCollector {
       modelUsage: {},
       currentTurnIndex: 0,
       currentTurn: null,
+      finalizedMessages: new Set(),
     }
 
     this.signalTracker.reset()
 
-    // Create session on the service
     if (this.uploader) {
       const session: TelemetrySession = {
         userId,
@@ -160,21 +149,15 @@ export class TelemetryCollector {
     log.debug("session started", { sessionId })
   }
 
-  /**
-   * End the current session
-   */
   async endSession(wasExplicitlyEnded = true): Promise<void> {
     if (!this.isEnabled || !this.sessionState) return
 
-    // Finalize any pending turn
     if (this.sessionState.currentTurn) {
       this.finalizeTurn()
     }
 
-    // Calculate final duration
     const durationSeconds = Math.floor((Date.now() - this.sessionState.startedAt.getTime()) / 1000)
 
-    // Update session with final state
     if (this.uploader) {
       await this.uploader.updateSession({
         endedAt: new Date().toISOString(),
@@ -196,22 +179,21 @@ export class TelemetryCollector {
     this.sessionState = null
   }
 
-  /**
-   * Record the start of a new turn (user message)
-   */
   recordUserMessage(content: string, hasImages = false, hasFiles = false): void {
     if (!this.isEnabled || !this.sessionState) return
 
     this.signalTracker.startTurn()
 
-    const consent = getConsentStatus(this.authToken ?? undefined)
+    // Respect dataLevel: metrics-only skips message content
+    const sanitizedContent = this.dataLevel === "full"
+      ? this.sanitizer.sanitizeContent(content)
+      : ""
 
-    // Create new turn
     this.sessionState.currentTurn = {
       turnIndex: this.sessionState.currentTurnIndex,
       createdAt: new Date().toISOString(),
       userMessage: {
-        content: this.sanitizer.sanitizeContent(content),
+        content: sanitizedContent,
         contentLength: content.length,
         hasImages,
         hasFiles,
@@ -221,9 +203,6 @@ export class TelemetryCollector {
     }
   }
 
-  /**
-   * Record the assistant response
-   */
   recordAssistantMessage(
     content: string,
     modelId: string,
@@ -233,8 +212,12 @@ export class TelemetryCollector {
   ): void {
     if (!this.isEnabled || !this.sessionState || !this.sessionState.currentTurn) return
 
+    const sanitizedContent = this.dataLevel === "full"
+      ? this.sanitizer.sanitizeContent(content)
+      : ""
+
     this.sessionState.currentTurn.assistantMessage = {
-      content: this.sanitizer.sanitizeContent(content),
+      content: sanitizedContent,
       contentLength: content.length,
       modelId,
       inputTokens,
@@ -242,7 +225,6 @@ export class TelemetryCollector {
       latencyMs,
     }
 
-    // Update model usage
     if (!this.sessionState.modelUsage[modelId]) {
       this.sessionState.modelUsage[modelId] = {
         turns: 0,
@@ -254,14 +236,10 @@ export class TelemetryCollector {
     this.sessionState.modelUsage[modelId].inputTokens += inputTokens
     this.sessionState.modelUsage[modelId].outputTokens += outputTokens
 
-    // Update session metrics
     this.sessionState.metrics.totalInputTokens += inputTokens
     this.sessionState.metrics.totalOutputTokens += outputTokens
   }
 
-  /**
-   * Record a tool call
-   */
   recordToolCall(
     name: string,
     status: "success" | "error",
@@ -283,7 +261,6 @@ export class TelemetryCollector {
 
     this.sessionState.currentTurn.toolCalls?.push(toolCall)
 
-    // Update metrics
     this.sessionState.metrics.toolCallCount++
     if (status === "error") {
       this.sessionState.metrics.toolErrorCount++
@@ -293,16 +270,10 @@ export class TelemetryCollector {
     }
   }
 
-  /**
-   * Record a file change
-   */
   recordFileChange(filePath: string, additions: number, deletions: number): void {
     if (!this.isEnabled || !this.sessionState || !this.sessionState.currentTurn) return
 
-    // Skip sensitive files
-    if (this.sanitizer.isSensitiveFile(filePath)) {
-      return
-    }
+    if (this.sanitizer.isSensitiveFile(filePath)) return
 
     const fileChange: FileChangeData = {
       pathHash: this.sanitizer.hashFilePath(filePath),
@@ -316,15 +287,11 @@ export class TelemetryCollector {
     }
     this.sessionState.currentTurn.fileChanges.push(fileChange)
 
-    // Update metrics
     this.sessionState.metrics.filesModified++
     this.sessionState.metrics.linesAdded += additions
     this.sessionState.metrics.linesDeleted += deletions
   }
 
-  /**
-   * Record that the current turn was retried
-   */
   recordRetry(): void {
     if (!this.isEnabled || !this.sessionState || !this.sessionState.currentTurn) return
 
@@ -332,114 +299,84 @@ export class TelemetryCollector {
     this.signalTracker.recordRetry()
   }
 
-  /**
-   * Record a compaction event
-   */
   recordCompaction(): void {
     if (!this.isEnabled) return
     this.signalTracker.recordCompaction()
   }
 
   /**
-   * Finalize the current turn and queue for upload
+   * Check if an assistant message has already been finalized (prevents duplicates
+   * from multiple step-finish events in multi-step tool-call loops).
    */
-  finalizeTurn(): void {
-    if (!this.sessionState?.currentTurn) return
+  hasFinalized(messageId: string): boolean {
+    return this.sessionState?.finalizedMessages.has(messageId) ?? false
+  }
+
+  /**
+   * Finalize the current turn and queue for upload.
+   * Returns false if the turn was incomplete and skipped.
+   */
+  finalizeTurn(messageId?: string): boolean {
+    if (!this.sessionState?.currentTurn) return false
 
     const turn = this.sessionState.currentTurn as TelemetryTurn
 
-    // Ensure we have both user and assistant messages
     if (!turn.userMessage || !turn.assistantMessage) {
       log.warn("incomplete turn, skipping", { turnIndex: turn.turnIndex })
       this.sessionState.currentTurn = null
-      return
+      return false
     }
 
-    // Queue for upload
+    if (messageId) {
+      this.sessionState.finalizedMessages.add(messageId)
+    }
+
     if (this.uploader) {
       this.uploader.addTurn(turn)
     }
 
-    // Update state
     this.sessionState.metrics.turnCount++
     this.sessionState.currentTurnIndex++
     this.sessionState.currentTurn = null
 
     this.signalTracker.endTurn()
+    return true
   }
 
-  /**
-   * Subscribe to Event Bus events
-   */
-  private subscribeToEvents(): void {
-    // Note: These subscriptions would integrate with the actual Event Bus
-    // For now, this is a placeholder that shows the intended integration points
-
-    // Example subscriptions (to be wired up with actual Bus events):
-    // Bus.subscribe("message.updated", this.handleMessageUpdated.bind(this))
-    // Bus.subscribe("session.created", this.handleSessionCreated.bind(this))
-    // Bus.subscribe("compaction.completed", this.handleCompaction.bind(this))
-
-    log.debug("event subscriptions registered")
-  }
-
-  /**
-   * Unsubscribe from all events
-   */
-  private unsubscribeAll(): void {
-    for (const unsubscribe of this.unsubscribers) {
-      unsubscribe()
-    }
-    this.unsubscribers = []
-  }
-
-  /**
-   * Detect the environment (local vs qBraid Lab)
-   */
   private detectEnvironment(): Environment {
-    // Check for qBraid Lab environment indicators
-    if (process.env.QBRAID_LAB || process.env.JUPYTERHUB_USER) {
-      return "lab"
-    }
+    if (process.env.QBRAID_LAB || process.env.JUPYTERHUB_USER) return "lab"
     return "local"
   }
 
-  /**
-   * Shutdown the collector
-   */
   async shutdown(): Promise<void> {
-    this.unsubscribeAll()
-    await this.endSession(false) // Treat as abandoned if shutdown without explicit end
+    await this.endSession(false)
   }
 }
 
-// Singleton instance
-let collectorInstance: TelemetryCollector | null = null
+/**
+ * Instance-scoped collector state. Each project directory gets its own collector
+ * that is automatically disposed when Instance.dispose() is called.
+ */
+const getCollectorState = Instance.state<{ collector: TelemetryCollector }>(
+  () => ({ collector: new TelemetryCollector() }),
+  async (state) => {
+    await state.collector.shutdown()
+  },
+)
 
 /**
- * Get or create the telemetry collector instance
+ * Get the collector for the current Instance context.
  */
 export function getCollector(): TelemetryCollector {
-  if (!collectorInstance) {
-    collectorInstance = new TelemetryCollector()
-  }
-  return collectorInstance
+  return getCollectorState().collector
 }
 
-/**
- * Initialize the telemetry system
- */
 export async function initializeTelemetry(authToken?: string): Promise<void> {
   const collector = getCollector()
   await collector.initialize(authToken)
 }
 
-/**
- * Shutdown the telemetry system
- */
 export async function shutdownTelemetry(): Promise<void> {
-  if (collectorInstance) {
-    await collectorInstance.shutdown()
-    collectorInstance = null
-  }
+  const collector = getCollector()
+  await collector.shutdown()
 }

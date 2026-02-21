@@ -35,7 +35,7 @@ import {
   shutdownTelemetry,
   type TelemetryCollector,
 } from "./collector"
-import { getConsentStatus, isTelemetryEnabled, clearConsentCache } from "./consent"
+import { getConsentStatus, isTelemetryEnabled, clearConsentCache, setLocalConsent, loadLocalConsent } from "./consent"
 import {
   initTelemetryIntegration,
   shutdownTelemetryIntegration,
@@ -241,6 +241,22 @@ export namespace Telemetry {
    */
   export function clearCache(): void {
     clearConsentCache()
+  }
+
+  /**
+   * Set local consent from the TUI first-run dialog.
+   * This persists via the KV store and takes effect immediately.
+   */
+  export function setConsent(enabled: boolean): void {
+    setLocalConsent(enabled)
+  }
+
+  /**
+   * Load previously-stored local consent value from KV store.
+   * Called during TUI initialization.
+   */
+  export function loadConsent(value: boolean | null): void {
+    loadLocalConsent(value)
   }
 }
 
