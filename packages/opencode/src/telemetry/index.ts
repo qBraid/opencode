@@ -41,7 +41,6 @@ import {
   shutdownTelemetryIntegration,
   finalizeTurn,
   recordUserTurn,
-  recordRetry,
 } from "./integration"
 import type { ConsentStatus, TelemetrySession, TelemetryTurn } from "./types"
 
@@ -104,11 +103,6 @@ export namespace Telemetry {
    * Use this for manual recording when not using Event Bus integration.
    */
   export const userMessage = recordUserTurn
-
-  /**
-   * Record that a turn was retried
-   */
-  export const retry = recordRetry
 
   /**
    * Start collecting for a new session

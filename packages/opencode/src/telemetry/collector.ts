@@ -20,6 +20,7 @@ import type {
   TelemetrySession,
   TelemetryTurn,
   ToolCallData,
+  UserTier,
 } from "./types"
 
 const log = Log.create({ service: "telemetry:collector" })
@@ -54,6 +55,7 @@ export class TelemetryCollector {
   private isEnabled = false
   private authToken: string | null = null
   private dataLevel: "full" | "metrics-only" = "full"
+  private consentTier: UserTier = "free"
 
   constructor() {
     this.signalTracker = createSignalTracker()
@@ -72,6 +74,7 @@ export class TelemetryCollector {
     }
 
     this.dataLevel = consent.dataLevel
+    this.consentTier = consent.tier
 
     const config = await Config.get()
     const telemetryConfig = config.qbraid?.telemetry
@@ -99,8 +102,6 @@ export class TelemetryCollector {
 
   async startSession(sessionId: string, userId: string, organizationId: string): Promise<void> {
     if (!this.isEnabled) return
-
-    const consent = await getConsentStatus(this.authToken ?? undefined)
 
     this.sessionState = {
       sessionId,
@@ -136,8 +137,8 @@ export class TelemetryCollector {
         environment: this.sessionState.environment,
         startedAt: this.sessionState.startedAt.toISOString(),
         durationSeconds: 0,
-        consentTier: consent.tier,
-        dataLevel: consent.dataLevel,
+        consentTier: this.consentTier,
+        dataLevel: this.dataLevel,
         metrics: this.sessionState.metrics,
         signals: this.signalTracker.getSignals(false),
         modelUsage: {},

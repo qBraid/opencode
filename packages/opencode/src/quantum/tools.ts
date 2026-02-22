@@ -27,11 +27,11 @@ export const QuantumDevicesTool = Tool.define("quantum_devices", {
     provider: z.string().optional()
       .describe("Filter by provider (e.g., 'ibm', 'aws', 'ionq', 'rigetti')."),
   }),
-  async execute(params) {
+  async execute(params, ctx) {
     const devices = await client.listDevices({
       status: params.status === "all" ? undefined : params.status,
       provider: params.provider,
-    })
+    }, ctx.abort)
 
     if (devices.length === 0) {
       return {
@@ -43,7 +43,7 @@ export const QuantumDevicesTool = Tool.define("quantum_devices", {
 
     const lines = devices.map((d) => {
       const pricing = d.pricing
-        ? `$${d.pricing.perShot ?? 0}/shot + $${d.pricing.perTask ?? 0}/task`
+        ? `${d.pricing.perShot ?? 0}/shot + ${d.pricing.perTask ?? 0}/task credits`
         : "N/A"
       return `${d.id} | ${d.name} | ${d.vendor} | ${d.status} | ${d.qubits}q | ${d.paradigm} | ${pricing}`
     })
@@ -75,16 +75,20 @@ export const QuantumEstimateCostTool = Tool.define("quantum_estimate_cost", {
     shots: z.number().int().min(1).default(1024)
       .describe("Number of measurement shots."),
   }),
-  async execute(params) {
+  async execute(params, ctx) {
     const [estimate, credits] = await Promise.all([
-      client.estimateCost(params.device_id, params.shots),
-      client.getCredits().catch(() => ({ balance: -1 })),
+      client.estimateCost(params.device_id, params.shots, ctx.abort),
+      client.getCredits(ctx.abort).catch(() => ({ balance: -1 })),
     ])
 
     const balanceStr = credits.balance >= 0 ? `${credits.balance}` : "unknown"
     const sufficient = credits.balance >= 0
       ? (credits.balance >= estimate.estimatedCredits ? "Yes" : "NO — insufficient credits")
       : "unknown"
+
+    const pricingNote = estimate.pricingAvailable
+      ? ""
+      : "\nWARNING: Pricing data unavailable for this device. Actual cost may differ."
 
     const output = [
       `Device: ${params.device_id}`,
@@ -94,11 +98,12 @@ export const QuantumEstimateCostTool = Tool.define("quantum_estimate_cost", {
       `  Per-task: ${estimate.breakdown.perTask.toFixed(4)}`,
       `Current balance: ${balanceStr} credits`,
       `Sufficient funds: ${sufficient}`,
-    ].join("\n")
+      pricingNote,
+    ].filter(Boolean).join("\n")
 
     return {
       title: `Cost estimate: ${estimate.estimatedCredits.toFixed(4)} credits`,
-      metadata: { cost: estimate.estimatedCredits, balance: credits.balance },
+      metadata: { cost: estimate.estimatedCredits, balance: credits.balance, pricingAvailable: estimate.pricingAvailable },
       output,
     }
   },
@@ -123,7 +128,11 @@ export const QuantumSubmitJobTool = Tool.define("quantum_submit_job", {
   }),
   async execute(params, ctx) {
     // Estimate cost first
-    const estimate = await client.estimateCost(params.device_id, params.shots)
+    const estimate = await client.estimateCost(params.device_id, params.shots, ctx.abort)
+
+    const costNote = estimate.pricingAvailable
+      ? `~${estimate.estimatedCredits.toFixed(4)} credits`
+      : "unknown (pricing unavailable)"
 
     // Use CodeQ's native permission system for cost approval
     await ctx.ask({
@@ -134,7 +143,8 @@ export const QuantumSubmitJobTool = Tool.define("quantum_submit_job", {
         device: params.device_id,
         shots: params.shots,
         cost: estimate.estimatedCredits,
-        summary: `Submit quantum job to ${params.device_id} (${params.shots} shots, ~${estimate.estimatedCredits.toFixed(4)} credits)`,
+        pricingAvailable: estimate.pricingAvailable,
+        summary: `Submit quantum job to ${params.device_id} (${params.shots} shots, ${costNote})`,
       },
     })
 
@@ -142,7 +152,7 @@ export const QuantumSubmitJobTool = Tool.define("quantum_submit_job", {
       deviceId: params.device_id,
       qasm: params.qasm,
       shots: params.shots,
-    })
+    }, ctx.abort)
 
     return {
       title: `Job submitted: ${job.id}`,
@@ -173,10 +183,11 @@ export const QuantumGetResultTool = Tool.define("quantum_get_result", {
   parameters: z.object({
     job_id: z.string().describe("The quantum job ID to retrieve results for."),
   }),
-  async execute(params) {
-    const job = await client.getJob(params.job_id)
+  async execute(params, ctx) {
+    const job = await client.getJob(params.job_id, ctx.abort)
+    const status = job.status.toUpperCase()
 
-    if (job.status !== "COMPLETED" && job.status !== "completed") {
+    if (status !== "COMPLETED") {
       return {
         title: `Job ${params.job_id}: ${job.status}`,
         metadata: { jobId: params.job_id, status: job.status },
@@ -184,14 +195,28 @@ export const QuantumGetResultTool = Tool.define("quantum_get_result", {
           `Job ID: ${params.job_id}`,
           `Status: ${job.status}`,
           `Device: ${job.device}`,
-          job.status === "QUEUED" || job.status === "RUNNING"
+          status === "QUEUED" || status === "RUNNING"
             ? "The job is still processing. Try again in a moment."
             : `The job ended with status: ${job.status}`,
         ].join("\n"),
       }
     }
 
-    const result = await client.getResult(params.job_id)
+    let result: client.JobResult
+    try {
+      result = await client.getResult(params.job_id, ctx.abort)
+    } catch (error) {
+      return {
+        title: `Job ${params.job_id}: completed (results unavailable)`,
+        metadata: { jobId: params.job_id, status: job.status },
+        output: [
+          `Job ID: ${params.job_id}`,
+          `Status: ${job.status}`,
+          `Device: ${job.device}`,
+          `Error retrieving results: ${error instanceof Error ? error.message : String(error)}`,
+        ].join("\n"),
+      }
+    }
 
     const measurements = result.measurements
       ? Object.entries(result.measurements)
@@ -221,12 +246,23 @@ export const QuantumGetResultTool = Tool.define("quantum_get_result", {
 // ============================================================================
 
 export const QuantumCancelJobTool = Tool.define("quantum_cancel_job", {
-  description: "Cancel a queued or running quantum job. Returns whether the cancellation succeeded.",
+  description: "Cancel a queued or running quantum job. Requires user confirmation. Returns whether the cancellation succeeded.",
   parameters: z.object({
     job_id: z.string().describe("The quantum job ID to cancel."),
   }),
-  async execute(params) {
-    const result = await client.cancelJob(params.job_id)
+  async execute(params, ctx) {
+    // Cancellation is destructive — require user approval
+    await ctx.ask({
+      permission: "quantum_cancel",
+      patterns: [params.job_id],
+      always: [],
+      metadata: {
+        jobId: params.job_id,
+        summary: `Cancel quantum job ${params.job_id}`,
+      },
+    })
+
+    const result = await client.cancelJob(params.job_id, ctx.abort)
 
     return {
       title: result.success ? `Cancelled: ${params.job_id}` : `Cancel failed: ${params.job_id}`,
@@ -248,11 +284,11 @@ export const QuantumListJobsTool = Tool.define("quantum_list_jobs", {
     status: z.string().optional().describe("Filter by job status (e.g., 'COMPLETED', 'RUNNING', 'QUEUED', 'FAILED')."),
     limit: z.number().int().min(1).max(100).default(10).describe("Maximum number of jobs to return."),
   }),
-  async execute(params) {
+  async execute(params, ctx) {
     const jobs = await client.listJobs({
       status: params.status,
       limit: params.limit,
-    })
+    }, ctx.abort)
 
     if (jobs.length === 0) {
       return {

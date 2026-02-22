@@ -63,7 +63,10 @@ export function DialogTelemetryConsent(props: DialogTelemetryConsentProps) {
     decline: "No Thanks",
   }
 
+  let handled = false
   const handleSelect = (key: string) => {
+    if (handled) return
+    handled = true
     const accepted = key === "understand" || key === "enable"
     kv.set(KV_TELEMETRY_CONSENT_SHOWN, true)
     kv.set(KV_TELEMETRY_ENABLED, accepted)
@@ -97,7 +100,7 @@ export function DialogTelemetryConsent(props: DialogTelemetryConsentProps) {
         <text fg={theme.textMuted}>{message()}</text>
       </box>
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1} gap={1}>
-        <For each={[...buttons()]}>
+        <For each={buttons() as readonly string[]}>
           {(key) => (
             <box
               paddingLeft={2}
@@ -131,8 +134,8 @@ DialogTelemetryConsent.show = (
           onResult={(accepted) => resolve(accepted)}
         />
       ),
-      // If user presses Esc on paid tier, treat as decline
-      () => resolve(false),
+      // Esc handler: free tier = accept (required), paid tier = decline
+      () => resolve(tier === "free"),
     )
   })
 }

@@ -363,50 +363,63 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
 
       if (config.models.exclusive) {
         // Exclusive mode: only branded models, no models.dev fetch
-        return content.replace(
+        const result = content.replace(
           /export async function get\(\) \{[\s\S]*?\n  \}/,
           `export async function get() {
     // Branding: embedded models (exclusive mode, no external fetch)
     return ${JSON.stringify(modelsJson)} as Record<string, Provider>
   }`,
         )
+        if (result === content) {
+          throw new Error("models.ts branding transform failed: get() regex did not match (exclusive mode)")
+        }
+        return result
       }
 
       // Default mode: prepend branded models, then merge models.dev data
       // This ensures qBraid models appear first and are the defaults,
       // while all upstream providers (Anthropic, OpenAI, Copilot, Codex, etc.)
       // remain available.
+      //
+      // The replacement body references variables from the original models.ts scope:
+      //   - filepath (const, path to cache file)
+      //   - data (Bun macro import for bundled snapshot)
+      //   - refresh() (background fetch to update cache)
       const brandedModelsStr = JSON.stringify(modelsJson)
-      return content.replace(
+      const result = content.replace(
         /export async function get\(\) \{[\s\S]*?\n  \}/,
         `export async function get() {
     // Branding: qBraid models prepended as defaults
     const branded = ${brandedModelsStr} as Record<string, Provider>
 
-    // Fetch upstream models from models.dev (or cache)
+    // Kick off background cache refresh
+    refresh()
+
+    // Try cached models first, then macro bundle, then live fetch
     let upstream: Record<string, Provider> = {}
     try {
-      const cached = await readCache()
+      const file = Bun.file(filepath)
+      const cached = await file.json().catch(() => undefined)
       if (cached) {
-        upstream = cached
+        upstream = cached as Record<string, Provider>
+      } else if (typeof data === "function") {
+        upstream = JSON.parse(await data()) as Record<string, Provider>
       } else {
-        const response = await fetch(url)
-        if (response.ok) {
-          upstream = await response.json() as Record<string, Provider>
-          await writeCache(upstream)
-        }
+        const json = await fetch("https://models.dev/api.json").then((x) => x.text())
+        upstream = JSON.parse(json) as Record<string, Provider>
       }
-    } catch (e) {
-      // Fall back to bundled snapshot if fetch fails
-      try {
-        upstream = (await import("./models-snapshot")).default as Record<string, Provider>
-      } catch {}
+    } catch {
+      // All upstream sources failed — branded models only
     }
 
-    // Merge: branded providers first, then upstream (branded wins on conflict)
+    // Merge: branded providers win on conflict
     return { ...upstream, ...branded }
   }`,
       )
+      if (result === content) {
+        throw new Error("models.ts branding transform failed: get() regex did not match. Has the upstream function signature changed?")
+      }
+      return result
     },
   },
 
@@ -431,10 +444,14 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       if (!config.models?.exclusive) return content
 
-      return content.replace(
+      const result = content.replace(
         /const BUILTIN = \["[^"]*"(?:,\s*"[^"]*")*\]/,
         "const BUILTIN: string[] = [] // Cleared by branding - no external plugins",
       )
+      if (result === content) {
+        throw new Error("plugin/index.ts branding transform failed: BUILTIN regex did not match")
+      }
+      return result
     },
   },
 
@@ -446,12 +463,16 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       if (!config.models?.exclusive) return content
 
-      return content.replace(
+      const result = content.replace(
         /const CUSTOM_LOADERS: Record<string, CustomLoader> = \{[\s\S]*?\n  \}(?=\n\n  export const Model)/,
         `const CUSTOM_LOADERS: Record<string, CustomLoader> = {
     // All custom loaders removed by branding (exclusive mode)
   }`,
       )
+      if (result === content) {
+        throw new Error("provider.ts branding transform failed: CUSTOM_LOADERS regex did not match")
+      }
+      return result
     },
   },
 

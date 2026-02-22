@@ -27,8 +27,8 @@ interface TelemetryState {
   activeSessions: Map<string, { startTime: number; userId: string; orgId: string }>
   /** Maps user messageID -> timestamp for latency calculation */
   turnStartTimes: Map<string, number>
-  /** Maps assistant messageID -> parent user messageID */
-  assistantToUser: Map<string, string>
+  /** Tracks which user messages have been recorded (cleared per session) */
+  recordedUserMessages: Set<string>
   unsubscribers: (() => void)[]
   initialized: boolean
 }
@@ -37,7 +37,7 @@ const getTelemetryState = Instance.state<TelemetryState>(
   () => ({
     activeSessions: new Map(),
     turnStartTimes: new Map(),
-    assistantToUser: new Map(),
+    recordedUserMessages: new Set(),
     unsubscribers: [],
     initialized: false,
   }),
@@ -47,13 +47,14 @@ const getTelemetryState = Instance.state<TelemetryState>(
     await shutdownTelemetry()
     state.activeSessions.clear()
     state.turnStartTimes.clear()
-    state.assistantToUser.clear()
+    state.recordedUserMessages.clear()
     state.unsubscribers = []
     log.info("telemetry disposed")
   },
 )
 
-// Cached user info from consent endpoint
+// Cached user info from consent endpoint — shared across instances because
+// the same qBraid account is used regardless of which project is open.
 let cachedUserInfo: { userId: string; organizationId?: string } | null = null
 
 /**
@@ -145,12 +146,9 @@ export async function initTelemetryIntegration(): Promise<void> {
   subscribeToEvents(state)
   state.initialized = true
 
-  // Flush pending data on process exit
-  const flushOnExit = () => {
-    shutdownTelemetry().catch(() => {})
-  }
-  process.once("SIGTERM", flushOnExit)
-  process.once("beforeExit", flushOnExit)
+  // Note: flush on exit is handled by Instance.state disposal (getTelemetryState)
+  // which calls shutdownTelemetry(). We do NOT register process.once handlers
+  // here because they would run outside any Instance context and crash.
 
   log.info("telemetry integration initialized")
 }
@@ -170,6 +168,8 @@ function subscribeToEvents(state: TelemetryState): void {
       const orgId = cachedUserInfo?.organizationId ?? "unknown"
 
       state.activeSessions.set(info.id, { startTime: Date.now(), userId, orgId })
+      state.recordedUserMessages.clear()
+      state.turnStartTimes.clear()
       await collector.startSession(info.id, userId, orgId)
       log.debug("session tracking started", { sessionId: info.id })
     }),
@@ -185,22 +185,11 @@ function subscribeToEvents(state: TelemetryState): void {
     }),
   )
 
-  // --- User messages ---
-  // We record user messages when we see a text part on a user message.
-  // MessageV2.Event.PartUpdated fires *after* the part is written to storage,
-  // avoiding the race where MessageV2.Event.Updated fires before parts exist.
-
-  const recordedUserMessages = new Set<string>()
+  // --- Tool calls via PartUpdated ---
 
   state.unsubscribers.push(
     Bus.subscribe(MessageV2.Event.PartUpdated, (event) => {
       const { part } = event.properties
-
-      // Record user message text parts (deduped per message)
-      if (part.type === "text" && !recordedUserMessages.has(part.messageID)) {
-        // Check if this part belongs to a user message by looking up the message
-        // We defer this to the Updated event for user messages to avoid extra reads
-      }
 
       // Handle completed tool calls
       if (part.type === "tool" && part.state.status === "completed") {
@@ -238,8 +227,8 @@ function subscribeToEvents(state: TelemetryState): void {
         state.turnStartTimes.set(info.id, Date.now())
 
         // Only record content once per message
-        if (recordedUserMessages.has(info.id)) return
-        recordedUserMessages.add(info.id)
+        if (state.recordedUserMessages.has(info.id)) return
+        state.recordedUserMessages.add(info.id)
 
         // Read parts — by the time Updated fires for a user message on subsequent
         // updates (e.g. when the assistant starts), parts should be available.
@@ -282,15 +271,13 @@ function subscribeToEvents(state: TelemetryState): void {
           const textParts = parts.filter((p): p is MessageV2.TextPart => p.type === "text")
           const content = textParts.map((p) => p.text).join("\n")
 
-          // Find the user message that started this turn.
-          // The most recent entry in turnStartTimes is the current turn's user message.
+          // Find the user message that started this turn via parentID.
+          // Assistant messages reference their parent user message.
+          const parentId = info.parentID
           let startTime = Date.now()
-          const entries = Array.from(state.turnStartTimes.entries())
-          if (entries.length > 0) {
-            const last = entries[entries.length - 1]
-            startTime = last[1]
-            // Clean up old entries to prevent unbounded growth
-            state.turnStartTimes.delete(last[0])
+          if (parentId && state.turnStartTimes.has(parentId)) {
+            startTime = state.turnStartTimes.get(parentId)!
+            state.turnStartTimes.delete(parentId)
           }
 
           const latencyMs = Date.now() - startTime
@@ -358,6 +345,7 @@ function subscribeToEvents(state: TelemetryState): void {
 
 /**
  * Finalize a turn manually (for non-Event-Bus callers).
+ * Records the assistant message and queues the turn for upload.
  */
 export function finalizeTurn(
   _sessionId: string,
@@ -369,6 +357,7 @@ export function finalizeTurn(
   const collector = getCollector()
   const latencyMs = startTime ? Date.now() - startTime : 0
   collector.recordAssistantMessage(assistantContent, modelId, tokens.input, tokens.output, latencyMs)
+  collector.finalizeTurn()
 }
 
 export function recordUserTurn(content: string, hasImages = false, hasFiles = false): void {
@@ -394,7 +383,7 @@ export async function shutdownTelemetryIntegration(): Promise<void> {
 
   state.activeSessions.clear()
   state.turnStartTimes.clear()
-  state.assistantToUser.clear()
+  state.recordedUserMessages.clear()
   state.initialized = false
 
   log.info("telemetry integration shutdown")

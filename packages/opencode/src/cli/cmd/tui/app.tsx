@@ -277,26 +277,25 @@ function App() {
   // --- First-run telemetry consent dialog ---
   // Fires once when sync is complete and user hasn't seen the consent dialog yet.
   // Must fire *before* the provider connect dialog so consent is captured first.
+  let consentShown = false
   createEffect(
     on(
       () => sync.status === "complete" && kv.get(KV_TELEMETRY_CONSENT_SHOWN) === undefined,
       (needsConsent, prev) => {
-        if (!needsConsent || prev) return
+        if (!needsConsent || prev || consentShown) return
+        consentShown = true
 
         // Load any existing consent value into the telemetry module
         const existing = kv.get(KV_TELEMETRY_ENABLED)
         if (existing !== undefined) {
-          Telemetry.loadConsent(existing as boolean)
-          // Already consented in a previous session, skip dialog
+          Telemetry.loadConsent(existing === true)
           kv.set(KV_TELEMETRY_CONSENT_SHOWN, true)
           return
         }
 
-        // Show the consent dialog. Free tier = informational only.
-        // TODO: Determine actual tier from auth/consent service. Default to "free".
-        dialog.replace(() => (
-          <DialogTelemetryConsent tier="free" onResult={() => {}} />
-        ))
+        // Default to "paid" tier (gives genuine opt-out) until we can
+        // determine the actual tier from the auth/consent service.
+        DialogTelemetryConsent.show(dialog, "paid")
       },
     ),
   )
