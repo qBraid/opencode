@@ -9,6 +9,7 @@
 import z from "zod"
 import { Tool } from "../tool/tool"
 import * as client from "./client"
+import * as QuantumState from "./state"
 
 // ============================================================================
 // quantum_devices — List available quantum devices
@@ -78,12 +79,13 @@ export const QuantumEstimateCostTool = Tool.define("quantum_estimate_cost", {
   async execute(params, ctx) {
     const [estimate, credits] = await Promise.all([
       client.estimateCost(params.device_id, params.shots, ctx.abort),
-      client.getCredits(ctx.abort).catch(() => ({ balance: -1 })),
+      client.getCredits(ctx.abort).catch(() => null),
     ])
 
-    const balanceStr = credits.balance >= 0 ? `${credits.balance}` : "unknown"
-    const sufficient = credits.balance >= 0
-      ? (credits.balance >= estimate.estimatedCredits ? "Yes" : "NO — insufficient credits")
+    const balance = credits ? credits.qbraidCredits + credits.awsCredits : -1
+    const balanceStr = balance >= 0 ? `${balance.toFixed(2)}` : "unknown"
+    const sufficient = balance >= 0
+      ? (balance >= estimate.estimatedCredits ? "Yes" : "NO — insufficient credits")
       : "unknown"
 
     const pricingNote = estimate.pricingAvailable
@@ -103,7 +105,7 @@ export const QuantumEstimateCostTool = Tool.define("quantum_estimate_cost", {
 
     return {
       title: `Cost estimate: ${estimate.estimatedCredits.toFixed(4)} credits`,
-      metadata: { cost: estimate.estimatedCredits, balance: credits.balance, pricingAvailable: estimate.pricingAvailable },
+      metadata: { cost: estimate.estimatedCredits, balance, pricingAvailable: estimate.pricingAvailable },
       output,
     }
   },
@@ -154,6 +156,10 @@ export const QuantumSubmitJobTool = Tool.define("quantum_submit_job", {
       shots: params.shots,
     }, ctx.abort)
 
+    // Refresh sidebar state — new active job + credits may have changed
+    QuantumState.refreshJobs().catch(() => {})
+    QuantumState.refreshCredits().catch(() => {})
+
     return {
       title: `Job submitted: ${job.id}`,
       metadata: { jobId: job.id, device: params.device_id },
@@ -186,6 +192,9 @@ export const QuantumGetResultTool = Tool.define("quantum_get_result", {
   async execute(params, ctx) {
     const job = await client.getJob(params.job_id, ctx.abort)
     const status = job.status.toUpperCase()
+
+    // Refresh sidebar — job status may have transitioned
+    QuantumState.refreshJobs().catch(() => {})
 
     if (status !== "COMPLETED") {
       return {
@@ -263,6 +272,10 @@ export const QuantumCancelJobTool = Tool.define("quantum_cancel_job", {
     })
 
     const result = await client.cancelJob(params.job_id, ctx.abort)
+
+    // Refresh sidebar — job removed from active, credits may be refunded
+    QuantumState.refreshJobs().catch(() => {})
+    QuantumState.refreshCredits().catch(() => {})
 
     return {
       title: result.success ? `Cancelled: ${params.job_id}` : `Cancel failed: ${params.job_id}`,

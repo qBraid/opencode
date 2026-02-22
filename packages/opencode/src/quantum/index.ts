@@ -11,3 +11,5 @@
 
 export { QUANTUM_TOOLS } from "./tools"
 export * as QuantumClient from "./client"
+export * as QuantumState from "./state"
+export * as QuantumPoller from "./poller"

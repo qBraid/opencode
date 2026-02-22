@@ -14,6 +14,7 @@ import { ShareNext } from "@/share/share-next"
 import { Snapshot } from "../snapshot"
 import { Truncate } from "../tool/truncation"
 import { Telemetry } from "@/telemetry"
+import { QuantumPoller, QuantumState } from "@/quantum"
 
 export async function InstanceBootstrap() {
   Log.Default.info("bootstrapping", { directory: Instance.directory })
@@ -32,6 +33,12 @@ export async function InstanceBootstrap() {
   // This is a no-op if telemetry is disabled by consent or config
   await Telemetry.initIntegration().catch((error) => {
     Log.Default.warn("telemetry initialization failed", { error })
+  })
+
+  // Initialize qBraid quantum state polling (credits, jobs, compute)
+  QuantumPoller.init()
+  QuantumState.refreshAll().catch((error) => {
+    Log.Default.warn("quantum state initialization failed", { error })
   })
 
   Bus.subscribe(Command.Event.Executed, async (payload) => {

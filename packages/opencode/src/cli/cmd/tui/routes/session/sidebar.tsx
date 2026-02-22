@@ -11,6 +11,7 @@ import { useKeybind } from "../../context/keybind"
 import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
+import { QuantumSidebarSection } from "../../component/quantum-status"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const sync = useSync()
@@ -21,6 +22,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const messages = createMemo(() => sync.data.message[props.sessionID] ?? [])
 
   const [expanded, setExpanded] = createStore({
+    qbraid: true,
     mcp: true,
     diff: true,
     todo: true,
@@ -98,6 +100,10 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
               <text fg={theme.textMuted}>{context()?.percentage ?? 0}% used</text>
               <text fg={theme.textMuted}>{cost()} spent</text>
             </box>
+            <QuantumSidebarSection
+              expanded={expanded.qbraid}
+              onToggle={() => setExpanded("qbraid", !expanded.qbraid)}
+            />
             <Show when={mcpEntries().length > 0}>
               <box>
                 <box

@@ -285,11 +285,66 @@ export async function listJobs(
   return arr.map((j: unknown) => QuantumJobSchema.parse(j))
 }
 
+// --- Zod schemas for credits / compute ---
+
+const CreditsBalanceSchema = z.object({
+  qbraidCredits: z.number().default(0),
+  awsCredits: z.number().default(0),
+  autoRecharge: z.boolean().optional(),
+  organizationId: z.string().optional(),
+  userId: z.string().optional(),
+})
+
+const ComputeStatusSchema = z.object({
+  status: z.enum(["running", "stopped", "starting", "stopping", "error"]).catch("stopped"),
+  profile: z.string().optional(),
+  uptime: z.number().optional(),
+})
+
+export type CreditsBalance = z.infer<typeof CreditsBalanceSchema>
+export type ComputeStatus = z.infer<typeof ComputeStatusSchema>
+
 /**
  * Get account credit balance.
+ * Uses /billing/credits/balance which returns qbraidCredits + awsCredits.
  */
-export async function getCredits(signal?: AbortSignal): Promise<{ balance: number }> {
-  return request<{ balance: number }>("GET", "/user/credits", undefined, signal)
+export async function getCredits(signal?: AbortSignal): Promise<CreditsBalance> {
+  const data = await request<unknown>("GET", "/billing/credits/balance", undefined, signal)
+  if (typeof data === "object" && data !== null && "data" in data) {
+    return CreditsBalanceSchema.parse((data as Record<string, unknown>).data)
+  }
+  return CreditsBalanceSchema.parse(data)
+}
+
+/**
+ * Get compute server status.
+ * Returns the current state of the user's JupyterHub compute server.
+ */
+export async function getComputeStatus(signal?: AbortSignal): Promise<ComputeStatus> {
+  try {
+    const data = await request<unknown>("GET", "/compute/servers/status", undefined, signal)
+    if (typeof data === "object" && data !== null && "data" in data) {
+      return ComputeStatusSchema.parse((data as Record<string, unknown>).data)
+    }
+    return ComputeStatusSchema.parse(data)
+  } catch {
+    return { status: "stopped" }
+  }
+}
+
+/**
+ * List active/recent jobs (limited to 10 most recent).
+ * Convenience wrapper for sidebar polling.
+ */
+export async function listActiveJobs(signal?: AbortSignal): Promise<QuantumJob[]> {
+  const params = new URLSearchParams()
+  params.set("limit", "10")
+  const endpoint = `/quantum/jobs?${params.toString()}`
+  const data = await request<unknown>("GET", endpoint, undefined, signal)
+  const arr = Array.isArray(data)
+    ? data
+    : (data as { jobs?: unknown[] }).jobs ?? []
+  return arr.map((j: unknown) => QuantumJobSchema.parse(j))
 }
 
 /**
