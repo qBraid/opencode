@@ -53,9 +53,25 @@ const JobResultSchema = z.object({
   success: z.boolean().optional(),
 })
 
+const CreditsBalanceSchema = z.object({
+  qbraidCredits: z.number().default(0),
+  awsCredits: z.number().default(0),
+  autoRecharge: z.boolean().optional(),
+  organizationId: z.string().optional(),
+  userId: z.string().optional(),
+})
+
+const ComputeStatusSchema = z.object({
+  status: z.enum(["running", "stopped", "starting", "stopping", "error"]).catch("stopped"),
+  profile: z.string().optional(),
+  uptime: z.number().optional(),
+})
+
 export type QuantumDevice = z.infer<typeof QuantumDeviceSchema>
 export type QuantumJob = z.infer<typeof QuantumJobSchema>
 export type JobResult = z.infer<typeof JobResultSchema>
+export type CreditsBalance = z.infer<typeof CreditsBalanceSchema>
+export type ComputeStatus = z.infer<typeof ComputeStatusSchema>
 
 export interface CostEstimate {
   deviceId: string
@@ -284,25 +300,6 @@ export async function listJobs(
 
   return arr.map((j: unknown) => QuantumJobSchema.parse(j))
 }
-
-// --- Zod schemas for credits / compute ---
-
-const CreditsBalanceSchema = z.object({
-  qbraidCredits: z.number().default(0),
-  awsCredits: z.number().default(0),
-  autoRecharge: z.boolean().optional(),
-  organizationId: z.string().optional(),
-  userId: z.string().optional(),
-})
-
-const ComputeStatusSchema = z.object({
-  status: z.enum(["running", "stopped", "starting", "stopping", "error"]).catch("stopped"),
-  profile: z.string().optional(),
-  uptime: z.number().optional(),
-})
-
-export type CreditsBalance = z.infer<typeof CreditsBalanceSchema>
-export type ComputeStatus = z.infer<typeof ComputeStatusSchema>
 
 /**
  * Get account credit balance.

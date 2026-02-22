@@ -30,7 +30,6 @@ function useQuantumState() {
 
 function formatCredits(n: number): string {
   if (n >= 1000) return `$${(n / 100).toFixed(0)}`
-  if (n >= 10) return `$${(n / 100).toFixed(2)}`
   return `$${(n / 100).toFixed(2)}`
 }
 
