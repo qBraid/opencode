@@ -243,7 +243,7 @@ export function deriveInactiveColor(brightColor: ColorInput, factor: number = 0.
   return RGBA.fromValues(baseRgba.r, baseRgba.g, baseRgba.b, factor)
 }
 
-export type KnightRiderStyle = "blocks" | "diamonds"
+export type KnightRiderStyle = "blocks" | "diamonds" | "interference"
 
 export interface KnightRiderOptions {
   width?: number
@@ -264,6 +264,45 @@ export interface KnightRiderOptions {
   minAlpha?: number
 }
 
+// --- Interference / diffraction animation ---
+
+const INTERFERENCE_CHARS = ["·", "∘", "○", "●", "◉"]
+const INTERFERENCE_FRAMES = 48
+
+/** Two-wave superposition with Born rule squaring. */
+function interferenceIntensity(x: number, phase: number): number {
+  const wave1 = Math.sin(2 * Math.PI * 2.0 * x - phase)
+  const wave2 = Math.sin(2 * Math.PI * 2.5 * x + 0.7 * phase)
+  const amplitude = (wave1 + wave2) / 2
+  return amplitude * amplitude // Born rule
+}
+
+function interferenceChar(intensity: number): string {
+  const idx = Math.min(Math.floor(intensity * INTERFERENCE_CHARS.length), INTERFERENCE_CHARS.length - 1)
+  return INTERFERENCE_CHARS[idx]
+}
+
+function createInterferenceFrames(width: number): string[] {
+  return Array.from({ length: INTERFERENCE_FRAMES }, (_, frame) => {
+    const phase = (frame / INTERFERENCE_FRAMES) * 2 * Math.PI
+    return Array.from({ length: width }, (_, i) => {
+      const x = i / width
+      return interferenceChar(interferenceIntensity(x, phase))
+    }).join("")
+  })
+}
+
+function createInterferenceColors(color: RGBA, width: number, minAlpha: number): ColorGenerator {
+  return (frameIndex: number, charIndex: number, _totalFrames: number, totalChars: number) => {
+    const w = totalChars || width
+    const phase = (frameIndex / INTERFERENCE_FRAMES) * 2 * Math.PI
+    const x = charIndex / w
+    const intensity = interferenceIntensity(x, phase)
+    const alpha = minAlpha + intensity * (1 - minAlpha)
+    return RGBA.fromValues(color.r, color.g, color.b, alpha)
+  }
+}
+
 /**
  * Creates frame strings for a Knight Rider style scanner animation
  * @param options Configuration options for the Knight Rider effect
@@ -272,6 +311,7 @@ export interface KnightRiderOptions {
 export function createFrames(options: KnightRiderOptions = {}): string[] {
   const width = options.width ?? 8
   const style = options.style ?? "diamonds"
+  if (style === "interference") return createInterferenceFrames(width)
   const holdStart = options.holdStart ?? 30
   const holdEnd = options.holdEnd ?? 9
 
@@ -334,6 +374,14 @@ export function createFrames(options: KnightRiderOptions = {}): string[] {
  * @returns ColorGenerator function
  */
 export function createColors(options: KnightRiderOptions = {}): ColorGenerator {
+  const width = options.width ?? 8
+  const style = options.style ?? "diamonds"
+  if (style === "interference") {
+    const base = options.color instanceof RGBA
+      ? options.color
+      : RGBA.fromHex((options.color as string) || "#00aaff")
+    return createInterferenceColors(base, width, options.minAlpha ?? 0)
+  }
   const holdStart = options.holdStart ?? 30
   const holdEnd = options.holdEnd ?? 9
 

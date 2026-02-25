@@ -1,8 +1,8 @@
 /**
- * CodeQ Telemetry Module
+ * Codeq Telemetry Module
  *
  * Collects session telemetry for analysis and model improvement.
- * This module is qBraid-specific and not part of upstream codeq.
+ * This module is qBraid-specific and not part of upstream opencode.
  *
  * Usage:
  *   import { Telemetry } from "./telemetry"
@@ -107,7 +107,7 @@ export namespace Telemetry {
   /**
    * Start collecting for a new session
    *
-   * @param sessionId - CodeQ session ID
+   * @param sessionId - Codeq session ID
    * @param userId - qBraid user ID
    * @param organizationId - Organization ID
    */

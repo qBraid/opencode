@@ -9,28 +9,50 @@
  * Design: minimal when idle, progressive disclosure when resources are active.
  */
 
-import { createSignal, onMount, onCleanup, Show, For } from "solid-js"
+import { createSignal, Show, For } from "solid-js"
 import { useTheme } from "../context/theme"
-import { Bus } from "@/bus"
+import { useSDK } from "../context/sdk"
 import * as QuantumState from "@/quantum/state"
 import type { State, JobSummary } from "@/quantum/state"
 
-function useQuantumState() {
-  const [state, setState] = createSignal<State>(QuantumState.get())
+function initial(): State {
+  return { configured: false, credits: null, jobs: null, compute: null, updatedAt: 0, error: null }
+}
 
-  onMount(() => {
-    const unsub = Bus.subscribe(QuantumState.Event.Updated, () => {
-      setState({ ...QuantumState.get() })
+function useQuantumState() {
+  // TUI runs in the main thread, server in a worker thread.
+  // Module-level state isn't shared across threads, so we read
+  // the full state from the event payload delivered via SSE.
+  //
+  // Events often arrive before this component mounts. Read the
+  // cached latest event to pick up state that was published early.
+  const sdk = useSDK()
+  const cached = sdk.latest.get(QuantumState.Event.Updated.type) as any
+  const init = cached?.properties?.state as State | undefined
+
+  const [state, setState] = createSignal<State>(init ?? initial())
+
+  sdk.event.on(QuantumState.Event.Updated.type as any, (event: any) => {
+    const s = event.properties?.state as State | undefined
+    if (!s) return
+    // Merge: keep existing non-null fields when incoming has null.
+    // Multiple refresh* calls publish independently; an early publish
+    // may have credits=null while a later one has the real value.
+    // Using updatedAt ensures we never regress to stale data.
+    setState((prev) => {
+      if (s.updatedAt >= prev.updatedAt) return s
+      return prev
     })
-    onCleanup(unsub)
   })
 
   return state
 }
 
 function formatCredits(n: number): string {
-  if (n >= 1000) return `$${(n / 100).toFixed(0)}`
-  return `$${(n / 100).toFixed(2)}`
+  if (n >= 1000) return `${Math.round(n)} cr`
+  if (n >= 100) return `${Math.round(n)} cr`
+  if (n >= 1) return `${n.toFixed(1)} cr`
+  return `${n.toFixed(2)} cr`
 }
 
 function formatElapsed(createdAt: number): string {
@@ -68,7 +90,7 @@ export function QuantumSidebarSection(props: { expanded: boolean; onToggle: () =
 
   const lowCredits = () => {
     const c = state().credits
-    return c != null && c.qbraid < 500 // less than $5
+    return c != null && c.qbraid < 10
   }
 
   return (

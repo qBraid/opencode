@@ -4,7 +4,7 @@
     "name": "qBraid",
     "env": ["QBRAID_API_KEY"],
     "npm": "@ai-sdk/qbraid",
-    "api": "https://account-v2.qbraid.com/api/ai/v1",
+    "api": "https://account.qbraid.com/api/ai/v1",
     "models": {
       "claude-opus-4-6": {
         "id": "claude-opus-4-6",

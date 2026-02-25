@@ -122,6 +122,38 @@ function buildReplacements(config: Branding): Replacement[] {
   const r = config.replacements
   const replacements: Replacement[] = []
 
+  // URL replacements MUST come before generic name replacements.
+  // Otherwise "anomalyco/opencode" becomes "anomalyco/codeq" before
+  // the GitHub URL regex can match the full original URL.
+  if (r.urls?.github) {
+    replacements.push({
+      search: /https:\/\/github\.com\/anomalyco\/opencode/g,
+      replace: r.urls.github,
+      description: `github repo -> ${r.urls.github}`,
+    })
+  }
+
+  if (r.urls?.website) {
+    replacements.push({
+      search: /https:\/\/opencode\.ai/g,
+      replace: r.urls.website,
+      description: `opencode.ai -> ${r.urls.website}`,
+    })
+  }
+
+  if (r.urls?.api) {
+    replacements.push({
+      search: /https:\/\/api\.opencode\.ai/g,
+      replace: r.urls.api,
+      description: `api.opencode.ai -> ${r.urls.api}`,
+    })
+    replacements.push({
+      search: /https:\/\/api\.dev\.opencode\.ai/g,
+      replace: r.urls.api,
+      description: `api.dev.opencode.ai -> ${r.urls.api}`,
+    })
+  }
+
   // Product name replacements (case-sensitive)
   // Use negative lookbehind/lookahead to avoid matching:
   // - @opencode-ai package names
@@ -155,36 +187,6 @@ function buildReplacements(config: Branding): Replacement[] {
       search: /(?<!@)opencode-ai(?!\/)/g,
       replace: r.npmPackage,
       description: `opencode-ai -> ${r.npmPackage}`,
-    })
-  }
-
-  // URL replacements
-  if (r.urls?.website) {
-    replacements.push({
-      search: /https:\/\/opencode\.ai/g,
-      replace: r.urls.website,
-      description: `opencode.ai -> ${r.urls.website}`,
-    })
-  }
-
-  if (r.urls?.api) {
-    replacements.push({
-      search: /https:\/\/api\.opencode\.ai/g,
-      replace: r.urls.api,
-      description: `api.opencode.ai -> ${r.urls.api}`,
-    })
-    replacements.push({
-      search: /https:\/\/api\.dev\.opencode\.ai/g,
-      replace: r.urls.api,
-      description: `api.dev.opencode.ai -> ${r.urls.api}`,
-    })
-  }
-
-  if (r.urls?.github) {
-    replacements.push({
-      search: /https:\/\/github\.com\/anomalyco\/opencode/g,
-      replace: r.urls.github,
-      description: `github repo -> ${r.urls.github}`,
     })
   }
 
@@ -482,7 +484,7 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       return content.replace(
         /You are OpenCode, the best coding agent on the planet\./,
-        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+        `You are ${config.replacements.displayName}, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
       )
     },
   },
@@ -491,7 +493,7 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       return content.replace(
         /You are OpenCode, the best coding agent on the planet\./,
-        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+        `You are ${config.replacements.displayName}, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
       )
     },
   },
@@ -500,7 +502,7 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       return content.replace(
         /You are OpenCode, the best coding agent on the planet\./,
-        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+        `You are ${config.replacements.displayName}, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
       )
     },
   },
@@ -509,7 +511,7 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       return content.replace(
         /You are OpenCode, the best coding agent on the planet\./,
-        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+        `You are ${config.replacements.displayName}, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
       )
     },
   },
@@ -518,7 +520,7 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       return content.replace(
         /You are OpenCode, the best coding agent on the planet\./,
-        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+        `You are ${config.replacements.displayName}, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
       )
     },
   },
@@ -527,7 +529,7 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     transform: (content, config) => {
       return content.replace(
         /You are OpenCode, the best coding agent on the planet\./,
-        `You are CodeQ, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
+        `You are ${config.replacements.displayName}, built by qBraid - the leading quantum software company. You are the universe's most powerful coding agent.`,
       )
     },
   },

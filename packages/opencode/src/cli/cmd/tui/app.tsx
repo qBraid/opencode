@@ -37,6 +37,7 @@ import open from "open"
 import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { DialogTelemetryConsent, KV_TELEMETRY_CONSENT_SHOWN, KV_TELEMETRY_ENABLED } from "@tui/component/dialog-telemetry-consent"
+import { DialogQBraidAuth, KV_QBRAID_AUTH_SHOWN } from "@tui/component/dialog-qbraid-auth"
 import { Telemetry } from "@/telemetry"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
@@ -300,9 +301,30 @@ function App() {
     ),
   )
 
+  // --- First-run qBraid API key dialog ---
+  // Fires once after telemetry consent is handled and user hasn't seen it yet.
+  let authShown = false
   createEffect(
     on(
-      () => sync.status === "complete" && sync.data.provider.length === 0,
+      () => sync.status === "complete" && kv.get(KV_TELEMETRY_CONSENT_SHOWN) !== undefined && kv.get(KV_QBRAID_AUTH_SHOWN) === undefined,
+      (needsAuth, prev) => {
+        if (!needsAuth || prev || authShown) return
+        authShown = true
+        DialogQBraidAuth.show(dialog).then((connected) => {
+          kv.set(KV_QBRAID_AUTH_SHOWN, true)
+          if (connected) {
+            toast.show({ variant: "info", message: "qBraid connected", duration: 3000 })
+          }
+        })
+      },
+    ),
+  )
+
+  createEffect(
+    on(
+      // Wait for first-run dialogs (consent + auth) before showing provider connect.
+      // On subsequent runs KV_QBRAID_AUTH_SHOWN is already set so this fires immediately.
+      () => sync.status === "complete" && sync.data.provider.length === 0 && kv.get(KV_QBRAID_AUTH_SHOWN) !== undefined,
       (isEmpty, wasEmpty) => {
         // only trigger when we transition into an empty-provider state
         if (!isEmpty || wasEmpty) return

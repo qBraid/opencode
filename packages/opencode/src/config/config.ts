@@ -1183,8 +1183,8 @@ export namespace Config {
             .describe("Timeout in milliseconds for model context protocol (MCP) requests"),
         })
         .optional(),
-      // qBraid-specific configuration (CodeQ customizations)
-      // This section is ignored by upstream codeq and contains qBraid-specific features
+      // qBraid-specific configuration (Codeq customizations)
+      // This section is ignored by upstream opencode and contains qBraid-specific features
       qbraid: z
         .object({
           telemetry: z
@@ -1227,10 +1227,10 @@ export namespace Config {
                 .describe("Maximum time (ms) to wait before flushing buffered data. Default: 30000"),
             })
             .optional()
-            .describe("Telemetry settings for CodeQ session data collection"),
+            .describe("Telemetry settings for Codeq session data collection"),
         })
         .optional()
-        .describe("qBraid-specific configuration for CodeQ"),
+        .describe("qBraid-specific configuration for Codeq"),
     })
     .strict()
     .meta({

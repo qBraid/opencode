@@ -1,10 +1,10 @@
-# CodeQ by qBraid
+# Codeq by qBraid
 
-CodeQ is qBraid's branded version of opencode - the universe's most powerful coding agent for quantum software development.
+Codeq is qBraid's branded version of opencode - the universe's most powerful coding agent for quantum software development.
 
 ## Configuration
 
-CodeQ is configured by qBraid's platform. The configuration file is placed at:
+Codeq is configured by qBraid's platform. The configuration file is placed at:
 
 - **Project-level**: `.codeq/opencode.json` in your project directory
 - **Global**: `~/.config/codeq/config.json`
@@ -18,7 +18,7 @@ CodeQ is configured by qBraid's platform. The configuration file is placed at:
     "qbraid": {
       "options": {
         "apiKey": "qbr_...",
-        "baseURL": "https://account-v2.qbraid.com/api/ai/v1"
+        "baseURL": "https://account.qbraid.com/api/ai/v1"
       }
     }
   }
@@ -27,7 +27,7 @@ CodeQ is configured by qBraid's platform. The configuration file is placed at:
 
 ## Available Models
 
-CodeQ provides access to the following models through qBraid:
+Codeq provides access to the following models through qBraid:
 
 | Model ID                   | Name              | Features                            |
 | -------------------------- | ----------------- | ----------------------------------- |
@@ -45,7 +45,7 @@ codeq models
 ## Usage
 
 ```bash
-# Start CodeQ TUI
+# Start Codeq TUI
 codeq
 
 # Run with a message
@@ -57,17 +57,18 @@ codeq /path/to/project
 
 ## Environment Variables
 
-CodeQ uses the `CODEQ_` prefix for environment variables:
+Codeq uses the `CODEQ_` prefix for environment variables:
 
-| Variable                  | Description                          |
-| ------------------------- | ------------------------------------ |
-| `CODEQ_MODEL`             | Default model to use                 |
-| `CODEQ_DISABLE_TELEMETRY` | Disable usage telemetry              |
-| `CODEQ_LOG_LEVEL`         | Log level (DEBUG, INFO, WARN, ERROR) |
+| Variable                  | Description                                      |
+| ------------------------- | ------------------------------------------------ |
+| `CODEQ_MODEL`             | Default model to use                              |
+| `CODEQ_DISABLE_TELEMETRY` | Disable usage telemetry                           |
+| `CODEQ_LOG_LEVEL`         | Log level (DEBUG, INFO, WARN, ERROR)              |
+| `QBRAID_API_URL`          | Override qBraid API endpoint (e.g. staging)       |
 
 ## Data Storage
 
-CodeQ stores data in:
+Codeq stores data in:
 
 - **Config**: `~/.config/codeq/`
 - **Cache**: `~/.cache/codeq/`
@@ -75,4 +76,4 @@ CodeQ stores data in:
 
 ## Support
 
-For issues with CodeQ, contact qBraid support at https://qbraid.com/support
+For issues with Codeq, contact qBraid support at https://qbraid.com/support

@@ -70,14 +70,21 @@ let _state: State = initial()
 const state = () => _state
 
 // --- Bus event for TUI reactivity ---
+// The event payload carries the full state snapshot because the TUI
+// runs in the main thread while the server runs in a worker thread.
+// Module-level variables are not shared across threads.
 
 export const Event = {
-  Updated: BusEvent.define("quantum.state.updated", z.object({})),
+  Updated: BusEvent.define(
+    "quantum.state.updated",
+    z.object({ state: z.any() }),
+  ),
 }
 
 function publish() {
   state().updatedAt = Date.now()
-  Bus.publish(Event.Updated, {})
+  const snap: State = JSON.parse(JSON.stringify(state()))
+  Bus.publish(Event.Updated, { state: snap })
 }
 
 // --- Public API ---

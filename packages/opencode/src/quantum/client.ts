@@ -20,54 +20,86 @@ const MAX_ERROR_BODY = 500
 
 // --- Zod schemas for API response validation ---
 
+// Schemas match qBraid API v1 wire format and normalize to internal types.
+// Devices use qrn as ID; jobs use jobQrn. Both use passthrough() to
+// tolerate extra fields from the API without failing.
+
 const QuantumDeviceSchema = z.object({
-  id: z.string(),
+  _id: z.string().optional(),
+  qrn: z.string().optional(),
   name: z.string(),
   vendor: z.string(),
-  provider: z.string(),
-  type: z.string().default("unknown"),
-  status: z.string(),
-  qubits: z.number().default(0),
   paradigm: z.string().default("unknown"),
-  pricing: z
-    .object({
-      perShot: z.number().optional(),
-      perTask: z.number().optional(),
-      perMinute: z.number().optional(),
-    })
-    .optional(),
-})
+  deviceType: z.string().default("unknown"),
+  status: z.string(),
+  numberQubits: z.number().nullable().default(0),
+  pricing: z.object({
+    perShot: z.number().optional(),
+    perTask: z.number().optional(),
+    perMinute: z.number().optional(),
+  }).nullable().optional(),
+}).passthrough().transform((d) => ({
+  id: d.qrn ?? d._id ?? "",
+  name: d.name,
+  vendor: d.vendor,
+  provider: d.vendor,
+  type: d.deviceType,
+  status: d.status,
+  qubits: d.numberQubits ?? 0,
+  paradigm: d.paradigm,
+  pricing: d.pricing ?? undefined,
+}))
 
 const QuantumJobSchema = z.object({
-  id: z.string(),
-  device: z.string(),
+  _id: z.string().optional(),
+  jobQrn: z.string().optional(),
   status: z.string(),
   shots: z.number(),
-  createdAt: z.string(),
-  endedAt: z.string().optional(),
   cost: z.number().optional(),
+  createdAt: z.string().optional(),
+  timeStamps: z.object({
+    createdAt: z.string().optional(),
+    endedAt: z.string().optional(),
+  }).nullable().optional(),
+  // In list response, device is a populated object; in single it may differ
+  device: z.union([z.string(), z.object({ qrn: z.string().optional(), name: z.string().optional() }).passthrough()]).optional(),
+  deviceQrn: z.string().optional(),
+}).passthrough().transform((j) => {
+  const device = typeof j.device === "string"
+    ? j.device
+    : j.device?.qrn ?? j.device?.name ?? j.deviceQrn ?? "unknown"
+  return {
+    id: j.jobQrn ?? j._id ?? "",
+    device,
+    status: j.status,
+    shots: j.shots,
+    createdAt: j.createdAt ?? j.timeStamps?.createdAt ?? "",
+    endedAt: j.timeStamps?.endedAt,
+    cost: j.cost,
+  }
 })
 
 const JobResultSchema = z.object({
   jobId: z.string().optional(),
+  jobQrn: z.string().optional(),
   status: z.string().optional(),
   measurements: z.record(z.string(), z.number()).optional(),
   success: z.boolean().optional(),
-})
+}).passthrough()
 
 const CreditsBalanceSchema = z.object({
   qbraidCredits: z.number().default(0),
   awsCredits: z.number().default(0),
-  autoRecharge: z.boolean().optional(),
+  autoRecharge: z.union([z.boolean(), z.string()]).optional(),
   organizationId: z.string().optional(),
   userId: z.string().optional(),
-})
+}).passthrough()
 
 const ComputeStatusSchema = z.object({
   status: z.enum(["running", "stopped", "starting", "stopping", "error"]).catch("stopped"),
   profile: z.string().optional(),
   uptime: z.number().optional(),
-})
+}).passthrough()
 
 export type QuantumDevice = z.infer<typeof QuantumDeviceSchema>
 export type QuantumJob = z.infer<typeof QuantumJobSchema>
@@ -108,21 +140,13 @@ async function resolveAuth(): Promise<{ apiKey: string; baseUrl: string } | null
     apiKey = process.env.QBRAID_API_KEY
   }
 
-  // 2. CodeQ auth store
+  // 2. Auth store — direct lookup by provider ID
   if (!apiKey) {
     try {
-      const authData = await Auth.all()
-      for (const [key, value] of Object.entries(authData)) {
-        if (key.includes("qbraid")) {
-          if (value.type === "wellknown" && value.token) {
-            apiKey = value.token
-            break
-          }
-          if (value.type === "api" && value.key) {
-            apiKey = value.key
-            break
-          }
-        }
+      const entry = await Auth.get("qbraid")
+      if (entry) {
+        if (entry.type === "api") apiKey = entry.key
+        else if (entry.type === "wellknown") apiKey = entry.token
       }
     } catch {
       // auth not available
@@ -171,7 +195,7 @@ async function request<T>(method: string, endpoint: string, body?: unknown, sign
     method,
     headers: {
       "Content-Type": "application/json",
-      "api-key": auth.apiKey,
+      "X-API-Key": auth.apiKey,
     },
     body: body ? JSON.stringify(body) : undefined,
     signal: signal ?? AbortSignal.timeout(30_000),
@@ -199,10 +223,12 @@ export async function listDevices(
   if (filters?.provider) params.set("provider", filters.provider)
 
   const query = params.toString()
-  const endpoint = `/quantum/devices${query ? `?${query}` : ""}`
+  const endpoint = `/devices${query ? `?${query}` : ""}`
   const data = await request<unknown>("GET", endpoint, undefined, signal)
 
-  const arr = Array.isArray(data) ? data : ((data as { devices?: unknown[] }).devices ?? [])
+  const arr = Array.isArray(data)
+    ? data
+    : (data as { data?: unknown[] }).data ?? []
 
   return arr.map((d: unknown) => QuantumDeviceSchema.parse(d))
 }
@@ -211,7 +237,7 @@ export async function listDevices(
  * Get details for a specific device.
  */
 export async function getDevice(deviceId: string, signal?: AbortSignal): Promise<QuantumDevice> {
-  const data = await request<unknown>("GET", `/quantum/devices/${encodeURIComponent(deviceId)}`, undefined, signal)
+  const data = await request<unknown>("GET", `/devices/${encodeURIComponent(deviceId)}`, undefined, signal)
   return QuantumDeviceSchema.parse(data)
 }
 
@@ -243,16 +269,11 @@ export async function submitJob(
   params: { deviceId: string; qasm: string; shots: number },
   signal?: AbortSignal,
 ): Promise<QuantumJob> {
-  const data = await request<unknown>(
-    "POST",
-    "/quantum/jobs",
-    {
-      deviceQrn: params.deviceId,
-      program: params.qasm,
-      shots: params.shots,
-    },
-    signal,
-  )
+  const data = await request<unknown>("POST", "/jobs", {
+    device: params.deviceId,
+    openQasm: params.qasm,
+    shots: params.shots,
+  }, signal)
   return QuantumJobSchema.parse(data)
 }
 
@@ -260,7 +281,7 @@ export async function submitJob(
  * Get the status and metadata of a job.
  */
 export async function getJob(jobId: string, signal?: AbortSignal): Promise<QuantumJob> {
-  const data = await request<unknown>("GET", `/quantum/jobs/${encodeURIComponent(jobId)}`, undefined, signal)
+  const data = await request<unknown>("GET", `/jobs/${encodeURIComponent(jobId)}`, undefined, signal)
   return QuantumJobSchema.parse(data)
 }
 
@@ -268,7 +289,7 @@ export async function getJob(jobId: string, signal?: AbortSignal): Promise<Quant
  * Get the results of a completed job.
  */
 export async function getResult(jobId: string, signal?: AbortSignal): Promise<JobResult> {
-  const data = await request<unknown>("GET", `/quantum/jobs/${encodeURIComponent(jobId)}/result`, undefined, signal)
+  const data = await request<unknown>("GET", `/jobs/${encodeURIComponent(jobId)}/result`, undefined, signal)
   return JobResultSchema.parse(data)
 }
 
@@ -276,7 +297,7 @@ export async function getResult(jobId: string, signal?: AbortSignal): Promise<Jo
  * Cancel a running or queued job.
  */
 export async function cancelJob(jobId: string, signal?: AbortSignal): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>("POST", `/quantum/jobs/${encodeURIComponent(jobId)}/cancel`, undefined, signal)
+  return request<{ success: boolean }>("POST", `/jobs/${encodeURIComponent(jobId)}/cancel`, undefined, signal)
 }
 
 /**
@@ -291,10 +312,12 @@ export async function listJobs(
   if (filters?.limit) params.set("limit", String(filters.limit))
 
   const query = params.toString()
-  const endpoint = `/quantum/jobs${query ? `?${query}` : ""}`
+  const endpoint = `/jobs${query ? `?${query}` : ""}`
   const data = await request<unknown>("GET", endpoint, undefined, signal)
 
-  const arr = Array.isArray(data) ? data : ((data as { jobs?: unknown[] }).jobs ?? [])
+  const arr = Array.isArray(data)
+    ? data
+    : (data as { data?: unknown[] }).data ?? []
 
   return arr.map((j: unknown) => QuantumJobSchema.parse(j))
 }
@@ -334,9 +357,11 @@ export async function getComputeStatus(signal?: AbortSignal): Promise<ComputeSta
 export async function listActiveJobs(signal?: AbortSignal): Promise<QuantumJob[]> {
   const params = new URLSearchParams()
   params.set("limit", "10")
-  const endpoint = `/quantum/jobs?${params.toString()}`
+  const endpoint = `/jobs?${params.toString()}`
   const data = await request<unknown>("GET", endpoint, undefined, signal)
-  const arr = Array.isArray(data) ? data : ((data as { jobs?: unknown[] }).jobs ?? [])
+  const arr = Array.isArray(data)
+    ? data
+    : (data as { data?: unknown[] }).data ?? []
   return arr.map((j: unknown) => QuantumJobSchema.parse(j))
 }
 

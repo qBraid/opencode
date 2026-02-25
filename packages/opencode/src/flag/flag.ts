@@ -51,7 +51,7 @@ export namespace Flag {
   export const OPENCODE_MODELS_URL = process.env["OPENCODE_MODELS_URL"]
   export const OPENCODE_MODELS_PATH = process.env["OPENCODE_MODELS_PATH"]
 
-  // qBraid / CodeQ flags
+  // qBraid / Codeq flags
   export const CODEQ_DISABLE_TELEMETRY = truthy("CODEQ_DISABLE_TELEMETRY")
 
   function number(key: string) {

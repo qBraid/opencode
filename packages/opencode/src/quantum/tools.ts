@@ -1,9 +1,9 @@
 /**
  * Quantum Tools
  *
- * Native CodeQ tool definitions for quantum computing operations.
+ * Native Codeq tool definitions for quantum computing operations.
  * These replace the pod_mcp MCP server for core quantum workflows,
- * running in-process with access to CodeQ's auth, permissions, and telemetry.
+ * running in-process with access to Codeq's auth, permissions, and telemetry.
  */
 
 import z from "zod"
@@ -136,7 +136,7 @@ export const QuantumSubmitJobTool = Tool.define("quantum_submit_job", {
       ? `~${estimate.estimatedCredits.toFixed(4)} credits`
       : "unknown (pricing unavailable)"
 
-    // Use CodeQ's native permission system for cost approval
+    // Use Codeq's native permission system for cost approval
     await ctx.ask({
       permission: "quantum_submit",
       patterns: [params.device_id],

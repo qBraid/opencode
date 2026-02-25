@@ -990,7 +990,7 @@ export namespace Provider {
       const provider = s.providers[model.providerID]
       const options = { ...provider.options }
 
-      if (model.api.npm.includes("@ai-sdk/openai-compatible") && options["includeUsage"] !== false) {
+      if ((model.api.npm.includes("@ai-sdk/openai-compatible") || model.api.npm === "@ai-sdk/qbraid") && options["includeUsage"] !== false) {
         options["includeUsage"] = true
       }
 

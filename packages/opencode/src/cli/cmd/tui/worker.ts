@@ -32,9 +32,13 @@ process.on("uncaughtException", (e) => {
   })
 })
 
-// Subscribe to global events and forward them via RPC
+// Subscribe to global events and forward them via RPC.
+// Emit on both channels: "global.event" for legacy consumers, and
+// "event" so TUI components receive bus events even if the SSE
+// stream hasn't connected yet (e.g. quantum.state.updated).
 GlobalBus.on("event", (event) => {
   Rpc.emit("global.event", event)
+  Rpc.emit("event", event.payload)
 })
 
 let server: Bun.Server<BunWebSocketData> | undefined

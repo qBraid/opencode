@@ -29,7 +29,7 @@ export async function InstanceBootstrap() {
   Snapshot.init()
   Truncate.init()
 
-  // Initialize qBraid telemetry (CodeQ-specific)
+  // Initialize qBraid telemetry (Codeq-specific)
   // This is a no-op if telemetry is disabled by consent or config
   await Telemetry.initIntegration().catch((error) => {
     Log.Default.warn("telemetry initialization failed", { error })
