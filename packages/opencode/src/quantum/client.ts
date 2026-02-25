@@ -29,11 +29,13 @@ const QuantumDeviceSchema = z.object({
   status: z.string(),
   qubits: z.number().default(0),
   paradigm: z.string().default("unknown"),
-  pricing: z.object({
-    perShot: z.number().optional(),
-    perTask: z.number().optional(),
-    perMinute: z.number().optional(),
-  }).optional(),
+  pricing: z
+    .object({
+      perShot: z.number().optional(),
+      perTask: z.number().optional(),
+      perMinute: z.number().optional(),
+    })
+    .optional(),
 })
 
 const QuantumJobSchema = z.object({
@@ -158,12 +160,7 @@ async function resolveAuth(): Promise<{ apiKey: string; baseUrl: string } | null
 
 // --- HTTP request helper ---
 
-async function request<T>(
-  method: string,
-  endpoint: string,
-  body?: unknown,
-  signal?: AbortSignal,
-): Promise<T> {
+async function request<T>(method: string, endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const auth = await resolveAuth()
   if (!auth) throw new Error("No qBraid API key found. Run `codeq /connect` to set up qBraid.")
 
@@ -205,9 +202,7 @@ export async function listDevices(
   const endpoint = `/quantum/devices${query ? `?${query}` : ""}`
   const data = await request<unknown>("GET", endpoint, undefined, signal)
 
-  const arr = Array.isArray(data)
-    ? data
-    : (data as { devices?: unknown[] }).devices ?? []
+  const arr = Array.isArray(data) ? data : ((data as { devices?: unknown[] }).devices ?? [])
 
   return arr.map((d: unknown) => QuantumDeviceSchema.parse(d))
 }
@@ -248,11 +243,16 @@ export async function submitJob(
   params: { deviceId: string; qasm: string; shots: number },
   signal?: AbortSignal,
 ): Promise<QuantumJob> {
-  const data = await request<unknown>("POST", "/quantum/jobs", {
-    device: params.deviceId,
-    openQasm: params.qasm,
-    shots: params.shots,
-  }, signal)
+  const data = await request<unknown>(
+    "POST",
+    "/quantum/jobs",
+    {
+      deviceQrn: params.deviceId,
+      program: params.qasm,
+      shots: params.shots,
+    },
+    signal,
+  )
   return QuantumJobSchema.parse(data)
 }
 
@@ -294,9 +294,7 @@ export async function listJobs(
   const endpoint = `/quantum/jobs${query ? `?${query}` : ""}`
   const data = await request<unknown>("GET", endpoint, undefined, signal)
 
-  const arr = Array.isArray(data)
-    ? data
-    : (data as { jobs?: unknown[] }).jobs ?? []
+  const arr = Array.isArray(data) ? data : ((data as { jobs?: unknown[] }).jobs ?? [])
 
   return arr.map((j: unknown) => QuantumJobSchema.parse(j))
 }
@@ -338,9 +336,7 @@ export async function listActiveJobs(signal?: AbortSignal): Promise<QuantumJob[]
   params.set("limit", "10")
   const endpoint = `/quantum/jobs?${params.toString()}`
   const data = await request<unknown>("GET", endpoint, undefined, signal)
-  const arr = Array.isArray(data)
-    ? data
-    : (data as { jobs?: unknown[] }).jobs ?? []
+  const arr = Array.isArray(data) ? data : ((data as { jobs?: unknown[] }).jobs ?? [])
   return arr.map((j: unknown) => QuantumJobSchema.parse(j))
 }
 

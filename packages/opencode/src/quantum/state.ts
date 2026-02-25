@@ -11,7 +11,6 @@
 
 import { Bus } from "../bus"
 import { BusEvent } from "../bus/bus-event"
-import { Instance } from "../project/instance"
 import { Log } from "../util/log"
 import z from "zod"
 import * as Client from "./client"
@@ -64,15 +63,16 @@ function initial(): State {
   }
 }
 
-const state = Instance.state(() => initial())
+// Module-level singleton — safe to call from any context (server or TUI SolidJS).
+// Instance.state() is intentionally avoided because AsyncLocalStorage is not
+// available inside SolidJS reactive computations.
+let _state: State = initial()
+const state = () => _state
 
 // --- Bus event for TUI reactivity ---
 
 export const Event = {
-  Updated: BusEvent.define(
-    "quantum.state.updated",
-    z.object({}),
-  ),
+  Updated: BusEvent.define("quantum.state.updated", z.object({})),
 }
 
 function publish() {
@@ -164,9 +164,5 @@ export async function refreshAll(signal?: AbortSignal) {
     publish()
     return
   }
-  await Promise.allSettled([
-    refreshCredits(signal),
-    refreshJobs(signal),
-    refreshCompute(signal),
-  ])
+  await Promise.allSettled([refreshCredits(signal), refreshJobs(signal), refreshCompute(signal)])
 }
