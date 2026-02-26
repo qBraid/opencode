@@ -155,8 +155,14 @@ function createThoughtSignatureExtractor() {
 export function createQBraid(options: QBraidProviderSettings = {}): (modelId: string) => LanguageModelV2 {
   const baseURL = withoutTrailingSlash(process.env.QBRAID_API_URL ?? options.baseURL ?? QBRAID_DEFAULT_API_URL)
 
+  // Send API key via both headers for compatibility:
+  // Production (account.qbraid.com) expects Authorization: Bearer
+  // Staging (pr-441---.../api/v1) expects X-API-Key
   const headers = {
-    ...(options.apiKey && { Authorization: `Bearer ${options.apiKey}` }),
+    ...(options.apiKey && {
+      "Authorization": `Bearer ${options.apiKey}`,
+      "X-API-Key": options.apiKey,
+    }),
     ...options.headers,
   }
 
