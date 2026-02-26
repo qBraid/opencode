@@ -10,6 +10,7 @@ import z from "zod"
 import { Tool } from "../tool/tool"
 import * as client from "./client"
 import * as QuantumState from "./state"
+import * as Jupyter from "./jupyter"
 
 // ============================================================================
 // quantum_devices — List available quantum devices
@@ -665,6 +666,199 @@ export const QuantumJobCircuitTool = Tool.define("quantum_job_circuit", {
   },
 })
 
+// ============================================================================
+// Jupyter session helper — shared by all remote tools
+// ============================================================================
+
+async function resolveJupyterSession(signal?: AbortSignal): Promise<Jupyter.JupyterSession> {
+  const status = await client.getServerStatus(signal)
+  if (!status.running) {
+    throw new Error(
+      "Compute server is not running. Use quantum_compute_start to launch one first.",
+    )
+  }
+
+  const data = await client.getSessionToken(signal)
+  return Jupyter.sessionFromApi(data)
+}
+
+// ============================================================================
+// quantum_remote_exec — Execute Python code on the cloud server
+// ============================================================================
+
+export const QuantumRemoteExecTool = Tool.define("quantum_remote_exec", {
+  description: [
+    "Execute Python code on the user's running qBraid compute server.",
+    "The code runs in a fresh Python kernel on the cloud server,",
+    "with access to all installed packages (Qiskit, Cirq, PennyLane, etc.).",
+    "Returns stdout, stderr, and execution status.",
+    "REQUIRES a running compute server — use quantum_compute_start first.",
+    "Use quantum_compute_status to check if the server is running.",
+  ].join("\n"),
+  parameters: z.object({
+    code: z.string().describe("Python code to execute on the remote server."),
+    timeout: z.number().int().min(1000).max(120000).default(30000)
+      .describe("Execution timeout in milliseconds. Default 30s, max 120s."),
+    kernel: z.string().default("python3")
+      .describe("Kernel name to use (default: python3). Use quantum_remote_kernels to see available kernels."),
+  }),
+  async execute(params, ctx) {
+    const session = await resolveJupyterSession(ctx.abort)
+    const result = await Jupyter.executeCode(session, params.code, {
+      timeout: params.timeout,
+      kernelName: params.kernel,
+      signal: ctx.abort,
+    })
+
+    const output = [
+      result.stdout ? `stdout:\n${result.stdout}` : null,
+      result.stderr ? `stderr:\n${result.stderr}` : null,
+      `\nExecution status: ${result.status}`,
+      result.error ? `Error: ${result.error.name}: ${result.error.value}` : null,
+    ].filter(Boolean).join("\n")
+
+    return {
+      title: result.status === "ok" ? "Executed successfully" : "Execution failed",
+      metadata: { status: result.status },
+      output,
+    }
+  },
+})
+
+// ============================================================================
+// quantum_remote_files — List files on the cloud server
+// ============================================================================
+
+export const QuantumRemoteFilesTool = Tool.define("quantum_remote_files", {
+  description: [
+    "List files and directories on the user's qBraid compute server.",
+    "Shows the remote workspace filesystem.",
+    "REQUIRES a running compute server.",
+  ].join("\n"),
+  parameters: z.object({
+    path: z.string().default("")
+      .describe("Directory path to list. Empty string for root."),
+  }),
+  async execute(params, ctx) {
+    const session = await resolveJupyterSession(ctx.abort)
+    const files = await Jupyter.listFiles(session, params.path, ctx.abort)
+
+    if (files.length === 0) {
+      return {
+        title: "Empty directory",
+        metadata: { count: 0 },
+        output: `No files in ${params.path || "/"}`,
+      }
+    }
+
+    const lines = files.map((f) => {
+      const icon = f.type === "directory" ? "dir " : f.type === "notebook" ? "nb  " : "file"
+      const size = f.type === "directory" ? "" : ` (${formatSize(f.size)})`
+      return `  ${icon}  ${f.name}${size}`
+    })
+
+    return {
+      title: `${files.length} items in ${params.path || "/"}`,
+      metadata: { count: files.length },
+      output: lines.join("\n"),
+    }
+  },
+})
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
+// ============================================================================
+// quantum_remote_read — Read a file from the cloud server
+// ============================================================================
+
+export const QuantumRemoteReadTool = Tool.define("quantum_remote_read", {
+  description: [
+    "Read the contents of a file on the user's qBraid compute server.",
+    "Works with text files, Python scripts, and Jupyter notebooks.",
+    "REQUIRES a running compute server.",
+  ].join("\n"),
+  parameters: z.object({
+    path: z.string().describe("File path to read (e.g., 'my_circuit.py')."),
+  }),
+  async execute(params, ctx) {
+    const session = await resolveJupyterSession(ctx.abort)
+    const content = await Jupyter.readFile(session, params.path, ctx.abort)
+
+    return {
+      title: `File: ${params.path}`,
+      metadata: { path: params.path, size: content.length },
+      output: content,
+    }
+  },
+})
+
+// ============================================================================
+// quantum_remote_write — Write a file to the cloud server
+// ============================================================================
+
+export const QuantumRemoteWriteTool = Tool.define("quantum_remote_write", {
+  description: [
+    "Write a file to the user's qBraid compute server.",
+    "Creates or overwrites a file in the remote workspace.",
+    "Use this to upload Python scripts, quantum circuits, or notebooks",
+    "before executing them with quantum_remote_exec.",
+    "REQUIRES a running compute server.",
+  ].join("\n"),
+  parameters: z.object({
+    path: z.string().describe("File path to write (e.g., 'bell_state.py')."),
+    content: z.string().describe("File content to write."),
+  }),
+  async execute(params, ctx) {
+    const session = await resolveJupyterSession(ctx.abort)
+    await Jupyter.writeFile(session, params.path, params.content, ctx.abort)
+
+    return {
+      title: `Wrote: ${params.path}`,
+      metadata: { path: params.path, size: params.content.length },
+      output: `Successfully wrote ${params.content.length} bytes to ${params.path}`,
+    }
+  },
+})
+
+// ============================================================================
+// quantum_remote_kernels — List available kernels on the cloud server
+// ============================================================================
+
+export const QuantumRemoteKernelsTool = Tool.define("quantum_remote_kernels", {
+  description: [
+    "List available Jupyter kernels on the user's qBraid compute server.",
+    "Shows which Python environments and languages are available for execution.",
+    "REQUIRES a running compute server.",
+  ].join("\n"),
+  parameters: z.object({}),
+  async execute(_params, ctx) {
+    const session = await resolveJupyterSession(ctx.abort)
+    const kernels = await Jupyter.listKernelSpecs(session, ctx.abort)
+
+    if (kernels.length === 0) {
+      return {
+        title: "No kernels found",
+        metadata: { count: 0 },
+        output: "No kernel specs found on the remote server.",
+      }
+    }
+
+    const lines = kernels.map((k) =>
+      `  ${k.name} | ${k.displayName} | ${k.language}`,
+    )
+
+    return {
+      title: `${kernels.length} kernels available`,
+      metadata: { count: kernels.length },
+      output: ["Name | Display Name | Language", "-".repeat(60), ...lines].join("\n"),
+    }
+  },
+})
+
 /**
  * All quantum tools for registration in the tool registry.
  */
@@ -683,4 +877,9 @@ export const QUANTUM_TOOLS = [
   QuantumComputeStopTool,
   QuantumAccountTool,
   QuantumJobCircuitTool,
+  QuantumRemoteExecTool,
+  QuantumRemoteFilesTool,
+  QuantumRemoteReadTool,
+  QuantumRemoteWriteTool,
+  QuantumRemoteKernelsTool,
 ]
