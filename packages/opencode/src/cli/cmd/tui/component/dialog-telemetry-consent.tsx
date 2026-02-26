@@ -39,15 +39,13 @@ export function DialogTelemetryConsent(props: DialogTelemetryConsentProps) {
 
   const message = () =>
     isFree()
-      ? "CodeQ collects anonymous usage telemetry to improve the product.\n" +
-        "This includes session metrics (token counts, tool usage, latency)\n" +
-        "and is required for free-tier accounts. No source code or secrets\n" +
-        "are collected. You can review our privacy policy at qbraid.com/privacy."
-      : "CodeQ can collect anonymous usage telemetry to help us improve\n" +
-        "the product. This includes session metrics like token counts,\n" +
-        "tool usage, and latency. No source code or secrets are collected.\n\n" +
-        "You can change this anytime in your config:\n" +
-        '  qbraid.telemetry.enabled: true | false'
+      ? "Codeq collects anonymous usage data to improve the product. This is required for free-tier accounts. No source code or secrets are collected."
+      : "Codeq can collect anonymous usage data to help improve the product. No source code or secrets are collected."
+
+  const configHint = () =>
+    isFree()
+      ? undefined
+      : "You can change this anytime in your config:  qbraid.telemetry.enabled: true | false"
 
   // Free tier: single button. Paid tier: two-button confirm/decline.
   const buttons = () =>
@@ -96,8 +94,11 @@ export function DialogTelemetryConsent(props: DialogTelemetryConsentProps) {
           <text fg={theme.textMuted}>esc</text>
         </Show>
       </box>
-      <box paddingBottom={1}>
-        <text fg={theme.textMuted}>{message()}</text>
+      <box paddingBottom={1} gap={1}>
+        <text fg={theme.textMuted} wrapMode="word">{message()}</text>
+        <Show when={configHint()}>
+          <text fg={theme.textMuted} wrapMode="word">{configHint()}</text>
+        </Show>
       </box>
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1} gap={1}>
         <For each={buttons() as readonly string[]}>

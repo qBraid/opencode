@@ -56,7 +56,7 @@ export const ModelsSchema = z.object({
 export const ReplacementsSchema = z.object({
   /** Product name (e.g., "codeq" instead of "opencode") */
   productName: z.string(),
-  /** Display name with proper casing (e.g., "CodeQ" instead of "OpenCode") */
+  /** Display name with proper casing (e.g., "Codeq" instead of "OpenCode") */
   displayName: z.string(),
   /** Package name for npm (e.g., "codeq" instead of "opencode-ai") */
   npmPackage: z.string().optional(),

@@ -8,6 +8,11 @@ import { createOpenAICompatible, OpenAICompatibleChatLanguageModel } from "@ai-s
 import type { LanguageModelV2 } from "@ai-sdk/provider"
 import { type FetchFunction, withoutTrailingSlash } from "@ai-sdk/provider-utils"
 
+/**
+ * Default qBraid API endpoint. Override at runtime with QBRAID_API_URL env var.
+ */
+export const QBRAID_DEFAULT_API_URL = "https://account.qbraid.com/api/ai/v1"
+
 export interface QBraidProviderSettings {
   /**
    * API key for authenticating requests.
@@ -16,7 +21,7 @@ export interface QBraidProviderSettings {
 
   /**
    * Base URL for the qBraid API calls.
-   * Defaults to https://api.qbraid.com/ai/v1
+   * Defaults to QBRAID_DEFAULT_API_URL; override with QBRAID_API_URL env var.
    */
   baseURL?: string
 
@@ -148,10 +153,17 @@ function createThoughtSignatureExtractor() {
  * to capture Gemini 3 thought signatures from tool calls.
  */
 export function createQBraid(options: QBraidProviderSettings = {}): (modelId: string) => LanguageModelV2 {
-  const baseURL = withoutTrailingSlash(options.baseURL ?? "https://api.qbraid.com/ai/v1")
+  const baseURL = withoutTrailingSlash(process.env.QBRAID_API_URL ?? options.baseURL ?? QBRAID_DEFAULT_API_URL)
+  const apiKey = process.env.QBRAID_API_KEY ?? options.apiKey
 
+  // Send API key via both headers for compatibility:
+  // Production (account.qbraid.com) expects Authorization: Bearer
+  // Staging (pr-441---.../api/v1) expects X-API-Key
   const headers = {
-    ...(options.apiKey && { Authorization: `Bearer ${options.apiKey}` }),
+    ...(apiKey && {
+      "Authorization": `Bearer ${apiKey}`,
+      "X-API-Key": apiKey,
+    }),
     ...options.headers,
   }
 

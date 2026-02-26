@@ -11,6 +11,7 @@
 
 import { parseArgs } from "util"
 import path from "path"
+import { QBRAID_DEFAULT_API_URL } from "../../packages/opencode/src/provider/sdk/qbraid/index"
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -28,7 +29,7 @@ Options:
   --output, -o  Output file path (default: models.json)
   --help, -h    Show this help message
 
-This script generates the models.json configuration for qBraid CodeQ.
+This script generates the models.json configuration for qBraid Codeq.
 It defines the AI models available through qBraid's platform.
 `)
   process.exit(0)
@@ -42,7 +43,7 @@ const models = {
     name: "qBraid",
     env: ["QBRAID_API_KEY"],
     npm: "@ai-sdk/openai-compatible",
-    api: "https://api.qbraid.com/ai/v1",
+    api: QBRAID_DEFAULT_API_URL,
     models: {
       "claude-sonnet-4": {
         id: "claude-sonnet-4",

@@ -58,23 +58,25 @@ const getTelemetryState = Instance.state<TelemetryState>(
 let cachedUserInfo: { userId: string; organizationId?: string } | null = null
 
 /**
- * Read qBraid API key from env, config, or ~/.qbraid/qbraidrc
+ * Read qBraid API key from env, auth store, or ~/.qbraid/qbraidrc.
+ * Uses Auth.get("qbraid") for direct lookup by provider ID.
  */
 async function getQBraidApiKey(): Promise<string | undefined> {
   if (process.env.QBRAID_API_KEY) return process.env.QBRAID_API_KEY
 
   try {
-    const { Config } = await import("../config/config")
-    const config = await Config.get()
-    const apiKey = config.provider?.qbraid?.options?.apiKey
-    if (apiKey && typeof apiKey === "string") return apiKey
+    const entry = await Auth.get("qbraid")
+    if (entry) {
+      if (entry.type === "api") return entry.key
+      if (entry.type === "wellknown") return entry.token
+    }
   } catch {
-    log.debug("could not read qbraid api key from config")
+    log.debug("could not read qbraid auth entry")
   }
 
   try {
-    const qbraidrcPath = path.join(os.homedir(), ".qbraid", "qbraidrc")
-    const content = await fs.readFile(qbraidrcPath, "utf-8")
+    const rcPath = path.join(os.homedir(), ".qbraid", "qbraidrc")
+    const content = await fs.readFile(rcPath, "utf-8")
     for (const line of content.split("\n")) {
       const match = line.trim().match(/^api-key\s*=\s*(.+)/)
       if (match) return match[1].trim()
@@ -96,26 +98,7 @@ export async function initTelemetryIntegration(): Promise<void> {
     return
   }
 
-  let authToken: string | undefined
-
-  // Try CodeQ auth system first
-  try {
-    const authData = await Auth.all()
-    for (const [key, value] of Object.entries(authData)) {
-      if (key.includes("qbraid") && value.type === "wellknown" && value.token) {
-        authToken = value.token
-        break
-      }
-    }
-  } catch {
-    log.debug("no auth token in codeq auth system")
-  }
-
-  // Fall back to qBraid API key
-  if (!authToken) {
-    authToken = await getQBraidApiKey()
-    if (authToken) log.debug("using qbraid api key for telemetry")
-  }
+  const authToken = await getQBraidApiKey()
 
   // Fetch user info from consent endpoint
   if (authToken) {
@@ -140,6 +123,10 @@ export async function initTelemetryIntegration(): Promise<void> {
     } catch (error) {
       log.warn("failed to fetch user info for telemetry", { error })
     }
+  } else {
+    // Anonymous mode — no API key, track as anonymous user
+    cachedUserInfo = { userId: "anonymous" }
+    log.debug("no qbraid api key, running telemetry in anonymous mode")
   }
 
   await initializeTelemetry(authToken)

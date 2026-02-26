@@ -741,17 +741,13 @@ export function Prompt(props: PromptProps) {
     return {
       frames: createFrames({
         color,
-        style: "blocks",
-        inactiveFactor: 0.6,
-        // enableFading: false,
-        minAlpha: 0.3,
+        style: "interference",
+        minAlpha: 0.15,
       }),
       color: createColors({
         color,
-        style: "blocks",
-        inactiveFactor: 0.6,
-        // enableFading: false,
-        minAlpha: 0.3,
+        style: "interference",
+        minAlpha: 0.15,
       }),
     }
   })

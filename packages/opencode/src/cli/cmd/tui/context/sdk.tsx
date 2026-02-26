@@ -29,6 +29,10 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       [key in Event["type"]]: Extract<Event, { type: key }>
     }>()
 
+    // Cache latest event per type so components that mount after events
+    // arrive can still read the most recent value.
+    const latest = new Map<string, Event>()
+
     let queue: Event[] = []
     let timer: Timer | undefined
     let last = 0
@@ -48,6 +52,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     const handleEvent = (event: Event) => {
+      latest.set((event as any).type, event)
       queue.push(event)
       const elapsed = Date.now() - last
 
@@ -61,13 +66,19 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       flush()
     }
 
+    // When using direct RPC (EventSource), register the listener
+    // immediately so events emitted before onMount aren't lost.
+    // The worker starts emitting events at module load, but onMount
+    // only fires after the first render — causing a race where early
+    // events (like quantum.state.updated) are permanently dropped.
+    if (props.events) {
+      const unsub = props.events.on(handleEvent)
+      onCleanup(unsub)
+    }
+
     onMount(async () => {
-      // If an event source is provided, use it instead of SSE
-      if (props.events) {
-        const unsub = props.events.on(handleEvent)
-        onCleanup(unsub)
-        return
-      }
+      // SSE path only — EventSource is already wired above
+      if (props.events) return
 
       // Fall back to SSE
       while (true) {
@@ -96,6 +107,6 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       if (timer) clearTimeout(timer)
     })
 
-    return { client: sdk, event: emitter, url: props.url }
+    return { client: sdk, event: emitter, latest, url: props.url }
   },
 })

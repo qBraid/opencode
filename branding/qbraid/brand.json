@@ -2,7 +2,7 @@
   "$schema": "../schema.json",
   "version": 1,
   "id": "qbraid",
-  "name": "qBraid CodeQ",
+  "name": "qBraid Codeq",
   "logo": {
     "cli": [
       ["                   ", "       "],
@@ -17,7 +17,7 @@
   },
   "replacements": {
     "productName": "codeq",
-    "displayName": "CodeQ",
+    "displayName": "Codeq",
     "npmPackage": "codeq",
     "binaryName": "codeq",
     "envPrefix": "CODEQ",

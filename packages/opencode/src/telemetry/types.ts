@@ -1,7 +1,7 @@
 /**
  * Telemetry Types
  *
- * Type definitions for CodeQ telemetry data.
+ * Type definitions for Codeq telemetry data.
  * These match the schema expected by the qbraid-telemetry microservice.
  */
 
@@ -16,7 +16,7 @@ export type UserTier = "free" | "standard" | "pro"
 export type DataLevel = "full" | "metrics-only"
 
 /**
- * Environment where CodeQ is running
+ * Environment where Codeq is running
  */
 export type Environment = "local" | "lab"
 
@@ -73,7 +73,7 @@ export interface ModelUsage {
 }
 
 /**
- * CodeQ Session telemetry payload
+ * Codeq Session telemetry payload
  */
 export interface TelemetrySession {
   // Identity
