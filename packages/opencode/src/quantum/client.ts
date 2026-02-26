@@ -190,6 +190,12 @@ async function resolveAuth(): Promise<{ apiKey: string; baseUrl: string } | null
 
 // --- HTTP request helper ---
 
+/** Unwrap qBraid API envelope: { success, data } → data */
+function unwrap(raw: unknown): unknown {
+  if (raw && typeof raw === "object" && "data" in raw) return (raw as Record<string, unknown>).data
+  return raw
+}
+
 async function request<T>(method: string, endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const auth = await resolveAuth()
   if (!auth) throw new Error("No qBraid API key found. Run `codeq /connect` to set up qBraid.")
@@ -244,7 +250,7 @@ export async function listDevices(
  */
 export async function getDevice(deviceId: string, signal?: AbortSignal): Promise<QuantumDevice> {
   const data = await request<unknown>("GET", `/devices/${encodeURIComponent(deviceId)}`, undefined, signal)
-  return QuantumDeviceSchema.parse(data)
+  return QuantumDeviceSchema.parse(unwrap(data))
 }
 
 /**
@@ -280,7 +286,7 @@ export async function submitJob(
     openQasm: params.qasm,
     shots: params.shots,
   }, signal)
-  return QuantumJobSchema.parse(data)
+  return QuantumJobSchema.parse(unwrap(data))
 }
 
 /**
@@ -288,7 +294,7 @@ export async function submitJob(
  */
 export async function getJob(jobId: string, signal?: AbortSignal): Promise<QuantumJob> {
   const data = await request<unknown>("GET", `/jobs/${encodeURIComponent(jobId)}`, undefined, signal)
-  return QuantumJobSchema.parse(data)
+  return QuantumJobSchema.parse(unwrap(data))
 }
 
 /**
@@ -296,7 +302,7 @@ export async function getJob(jobId: string, signal?: AbortSignal): Promise<Quant
  */
 export async function getResult(jobId: string, signal?: AbortSignal): Promise<JobResult> {
   const data = await request<unknown>("GET", `/jobs/${encodeURIComponent(jobId)}/result`, undefined, signal)
-  return JobResultSchema.parse(data)
+  return JobResultSchema.parse(unwrap(data))
 }
 
 /**
