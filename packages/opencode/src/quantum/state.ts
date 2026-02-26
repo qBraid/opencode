@@ -28,6 +28,26 @@ export interface JobSummary {
   cost?: number
 }
 
+export type InstanceStatus = "running" | "stopped" | "starting" | "stopping" | "error"
+
+export interface ComputeInstance {
+  /** Server name — empty string for JupyterHub default server */
+  name: string
+  /** Compute profile slug (e.g. "cuda-quantum-try") */
+  profile: string
+  status: InstanceStatus
+  /** Cluster hosting this instance */
+  clusterId?: string
+  /** Epoch ms when the server started */
+  startedAt?: number
+  /** Credit cost per minute while running */
+  rate?: number
+  /** Number of active Jupyter kernels on this instance */
+  kernels: number
+  /** Currently executing code (shows in sidebar) */
+  executing?: string
+}
+
 export interface State {
   configured: boolean
   credits: {
@@ -39,11 +59,8 @@ export interface State {
     recentDone: number
     recentFailed: number
   } | null
-  compute: {
-    status: "running" | "stopped" | "starting" | "stopping" | "error"
-    profile?: string
-    uptime?: number
-  } | null
+  /** Active compute instances — array for multi-instance support */
+  instances: ComputeInstance[]
   updatedAt: number
   error: string | null
 }
@@ -57,7 +74,7 @@ function initial(): State {
     configured: false,
     credits: null,
     jobs: null,
-    compute: null,
+    instances: [],
     updatedAt: 0,
     error: null,
   }
@@ -148,20 +165,110 @@ export async function refreshJobs(signal?: AbortSignal) {
 
 export async function refreshCompute(signal?: AbortSignal) {
   try {
-    const status = await Client.getComputeStatus(signal)
-    const s = state()
-    s.compute = {
-      status: status.status,
-      profile: status.profile,
-      uptime: status.uptime,
+    // Try multi-instance listServers endpoint first.
+    // Falls back to legacy getServerStatus for older API versions.
+    let updated = false
+    try {
+      const result = await Client.listServers(signal)
+      const s = state()
+      const live = result.servers.filter((srv) => srv.status !== "stopped")
+      // Merge: preserve local-only fields (kernels, executing, rate)
+      const merged: ComputeInstance[] = live.map((srv) => {
+        const prev = s.instances.find((i) => i.name === srv.name)
+        return {
+          name: srv.name,
+          profile: srv.profile ?? "unknown",
+          status: srv.status as InstanceStatus,
+          clusterId: result.clusterId,
+          startedAt: srv.startedAt ? new Date(srv.startedAt).getTime() : prev?.startedAt,
+          rate: prev?.rate,
+          kernels: prev?.kernels ?? 0,
+          executing: prev?.executing,
+        }
+      })
+      s.instances = merged
+      s.error = null
+      updated = true
+      publish()
+    } catch {
+      // listServers not available — fall back to legacy status
     }
-    s.error = null
-    publish()
+
+    if (!updated) {
+      const status = await Client.getServerStatus(signal)
+      const s = state()
+      const st: InstanceStatus = status.running ? "running" : status.starting ? "starting" : "stopped"
+      if (st === "stopped") {
+        s.instances = []
+      } else {
+        const existing = s.instances.find((i) => i.name === "")
+        if (existing) {
+          existing.status = st
+          existing.profile = status.profile ?? existing.profile
+          existing.clusterId = status.clusterId ?? existing.clusterId
+        } else {
+          s.instances = [{
+            name: "",
+            profile: status.profile ?? "unknown",
+            status: st,
+            clusterId: status.clusterId,
+            kernels: 0,
+          }]
+        }
+      }
+      s.error = null
+      publish()
+    }
   } catch (e) {
     log.warn("compute refresh failed", { error: String(e) })
     state().error = "compute unavailable"
     publish()
   }
+}
+
+/**
+ * Mark an instance as executing code (shows in sidebar).
+ * Call with `undefined` label to clear.
+ */
+export function setExecuting(name: string, label?: string) {
+  const inst = state().instances.find((i) => i.name === name)
+  if (!inst) return
+  inst.executing = label
+  publish()
+}
+
+/**
+ * Update kernel count for an instance after starting/stopping kernels.
+ */
+export function setKernels(name: string, count: number) {
+  const inst = state().instances.find((i) => i.name === name)
+  if (!inst) return
+  inst.kernels = count
+  publish()
+}
+
+/**
+ * Record that an instance was started with a specific profile.
+ * Called from the compute_start tool before the API confirms.
+ */
+export function instanceStarting(name: string, profile: string, rate?: number) {
+  const s = state()
+  const existing = s.instances.find((i) => i.name === name)
+  if (existing) {
+    existing.status = "starting"
+    existing.profile = profile
+    existing.rate = rate
+  } else {
+    s.instances.push({
+      name,
+      profile,
+      status: "starting",
+      kernels: 0,
+      rate,
+      startedAt: Date.now(),
+    })
+  }
+  publish()
 }
 
 export async function refreshAll(signal?: AbortSignal) {

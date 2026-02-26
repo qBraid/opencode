@@ -13,10 +13,10 @@ import { createSignal, Show, For } from "solid-js"
 import { useTheme } from "../context/theme"
 import { useSDK } from "../context/sdk"
 import * as QuantumState from "@/quantum/state"
-import type { State, JobSummary } from "@/quantum/state"
+import type { State, JobSummary, ComputeInstance } from "@/quantum/state"
 
 function initial(): State {
-  return { configured: false, credits: null, jobs: null, compute: null, updatedAt: 0, error: null }
+  return { configured: false, credits: null, jobs: null, instances: [], updatedAt: 0, error: null }
 }
 
 function useQuantumState() {
@@ -78,8 +78,8 @@ export function QuantumSidebarSection(props: { expanded: boolean; onToggle: () =
     const s = state()
     if (!s.configured) return false
     const activeJobs = s.jobs?.active.length ?? 0
-    const computeActive = s.compute?.status === "running" || s.compute?.status === "starting"
-    return activeJobs > 0 || computeActive
+    const liveInstances = s.instances.filter((i) => i.status === "running" || i.status === "starting").length
+    return activeJobs > 0 || liveInstances > 0
   }
 
   const creditsText = () => {
@@ -112,8 +112,8 @@ export function QuantumSidebarSection(props: { expanded: boolean; onToggle: () =
         </box>
 
         <Show when={props.expanded}>
+          <InstancesSection instances={state().instances} />
           <JobsSection jobs={state().jobs} />
-          <ComputeSection compute={state().compute} />
         </Show>
       </box>
     </Show>
@@ -183,25 +183,78 @@ function JobRow(props: { job: JobSummary }) {
   )
 }
 
-function ComputeSection(props: { compute: State["compute"] }) {
+function InstancesSection(props: { instances: ComputeInstance[] }) {
   const { theme } = useTheme()
 
+  const live = () => props.instances.filter((i) => i.status !== "stopped")
+
+  return (
+    <Show
+      when={live().length > 0}
+      fallback={<text fg={theme.textMuted}>{"  "}No compute instances</text>}
+    >
+      <For each={live()}>
+        {(inst) => <InstanceRow instance={inst} />}
+      </For>
+    </Show>
+  )
+}
+
+function formatUptime(startedAt?: number): string {
+  if (!startedAt) return ""
+  const ms = Date.now() - startedAt
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`
+  return `${(ms / 3_600_000).toFixed(1)}h`
+}
+
+function InstanceRow(props: { instance: ComputeInstance }) {
+  const { theme } = useTheme()
+  const inst = () => props.instance
+
+  const dot = () => {
+    const s = inst().status
+    if (s === "running") return theme.success
+    if (s === "starting") return theme.warning
+    if (s === "stopping") return theme.textMuted
+    if (s === "error") return theme.error
+    return theme.textMuted
+  }
+
   const label = () => {
-    const c = props.compute
-    if (!c) return null
-    if (c.status === "running") return { text: `${c.profile ?? "instance"} running`, fg: theme.success }
-    if (c.status === "starting") return { text: "starting...", fg: theme.warning }
-    return null
+    const i = inst()
+    const name = i.profile || i.name || "instance"
+    if (i.status === "starting") return `${name} starting...`
+    if (i.status === "stopping") return `${name} stopping...`
+    return name
+  }
+
+  const detail = () => {
+    const i = inst()
+    const parts: string[] = []
+    if (i.status === "running") {
+      const up = formatUptime(i.startedAt)
+      if (up) parts.push(up)
+      if (i.rate) parts.push(`${i.rate.toFixed(2)} cr/min`)
+      if (i.kernels > 0) parts.push(`${i.kernels} kernel${i.kernels > 1 ? "s" : ""}`)
+    }
+    return parts.join(" · ")
   }
 
   return (
-    <Show when={label()}>
-      {(l) => (
-        <text fg={theme.textMuted}>
-          {"  "}<span style={{ fg: l().fg }}>▸</span> {l().text}
+    <box flexDirection="column">
+      <box flexDirection="row" gap={1} justifyContent="space-between">
+        <text fg={theme.text}>
+          {"  "}<span style={{ fg: dot() }}>●</span> {label()}
         </text>
-      )}
-    </Show>
+        <Show when={detail()}>
+          <text fg={theme.textMuted}>{detail()}</text>
+        </Show>
+      </box>
+      <Show when={inst().executing}>
+        <text fg={theme.textMuted}>{"    "}⟳ {inst().executing}</text>
+      </Show>
+    </box>
   )
 }
 
@@ -212,19 +265,23 @@ export function QuantumFooterIndicator() {
   const state = useQuantumState()
 
   const visible = () => state().configured
-  const activeCount = () => state().jobs?.active.length ?? 0
+  const activeJobs = () => state().jobs?.active.length ?? 0
+  const liveInstances = () => state().instances.filter((i) => i.status === "running" || i.status === "starting").length
 
   const indicator = () => {
-    const n = activeCount()
-    if (n > 0) return { fg: theme.success, text: `⚛ ${n} QPU` }
-    return { fg: theme.textMuted, text: "⚛ qBraid" }
+    const jobs = activeJobs()
+    const inst = liveInstances()
+    if (jobs > 0 && inst > 0) return { fg: theme.success, text: `${jobs} QPU · ${inst} compute` }
+    if (jobs > 0) return { fg: theme.success, text: `${jobs} QPU` }
+    if (inst > 0) return { fg: theme.success, text: `${inst} compute` }
+    return { fg: theme.textMuted, text: "qBraid" }
   }
 
   return (
     <Show when={visible()}>
       <text fg={theme.text}>
         <span style={{ fg: indicator().fg }}>⚛</span>{" "}
-        {activeCount() > 0 ? `${activeCount()} QPU` : "qBraid"}
+        {indicator().text}
       </text>
     </Show>
   )

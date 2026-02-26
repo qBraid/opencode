@@ -548,23 +548,60 @@ export async function getServerStatus(signal?: AbortSignal): Promise<ServerStatu
 
 /**
  * Start a compute server with a specific profile.
+ * Pass serverName to start a named server (multi-instance).
  */
 export async function startServer(
   profileSlug: string,
   signal?: AbortSignal,
+  serverName?: string,
 ): Promise<{ message: string; status: string }> {
-  const data = await request<unknown>("POST", "/compute/servers/start", { profileSlug }, signal)
+  const body: Record<string, string> = { profileSlug }
+  if (serverName) body.serverName = serverName
+  const data = await request<unknown>("POST", "/compute/servers/start", body, signal)
   const inner = (data as { data?: { message?: string; status?: string } }).data ?? {}
   return { message: inner.message ?? "Starting", status: inner.status ?? "starting" }
 }
 
 /**
  * Stop the running compute server.
+ * Pass serverName to stop a specific named server.
  */
-export async function stopServer(signal?: AbortSignal): Promise<{ message: string; status: string }> {
-  const data = await request<unknown>("DELETE", "/compute/servers/stop", undefined, signal)
+export async function stopServer(signal?: AbortSignal, serverName?: string): Promise<{ message: string; status: string }> {
+  const params = new URLSearchParams()
+  if (serverName) params.set("serverName", serverName)
+  const query = params.toString()
+  const endpoint = `/compute/servers/stop${query ? `?${query}` : ""}`
+  const data = await request<unknown>("DELETE", endpoint, undefined, signal)
   const inner = (data as { data?: { message?: string; status?: string } }).data ?? {}
   return { message: inner.message ?? "Stopping", status: inner.status ?? "stopping" }
+}
+
+/**
+ * List all servers (running, starting, stopped) for the user.
+ * Returns named servers and the default server.
+ */
+export async function listServers(signal?: AbortSignal): Promise<{
+  clusterId: string
+  servers: Array<{
+    name: string
+    profile: string | null
+    status: "running" | "starting" | "stopping" | "stopped"
+    startedAt?: string
+    lastActivity?: string
+  }>
+}> {
+  const data = await request<unknown>("GET", "/compute/servers", undefined, signal)
+  const inner = (data as { data?: unknown }).data ?? data
+  return inner as {
+    clusterId: string
+    servers: Array<{
+      name: string
+      profile: string | null
+      status: "running" | "starting" | "stopping" | "stopped"
+      startedAt?: string
+      lastActivity?: string
+    }>
+  }
 }
 
 /**

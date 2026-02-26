@@ -527,9 +527,12 @@ export const QuantumComputeStartTool = Tool.define("quantum_compute_start", {
       },
     })
 
+    // Optimistically show instance in sidebar immediately
+    QuantumState.instanceStarting("", params.profile)
+
     const result = await client.startServer(params.profile, ctx.abort)
 
-    // Refresh sidebar
+    // Refresh with real status from API
     QuantumState.refreshCompute().catch(() => {})
 
     return {
@@ -704,23 +707,36 @@ export const QuantumRemoteExecTool = Tool.define("quantum_remote_exec", {
   }),
   async execute(params, ctx) {
     const session = await resolveJupyterSession(ctx.abort)
-    const result = await Jupyter.executeCode(session, params.code, {
-      timeout: params.timeout,
-      kernelName: params.kernel,
-      signal: ctx.abort,
-    })
 
-    const output = [
-      result.stdout ? `stdout:\n${result.stdout}` : null,
-      result.stderr ? `stderr:\n${result.stderr}` : null,
-      `\nExecution status: ${result.status}`,
-      result.error ? `Error: ${result.error.name}: ${result.error.value}` : null,
-    ].filter(Boolean).join("\n")
+    // Show execution status in sidebar
+    const snippet = params.code.split("\n")[0].slice(0, 40)
+    QuantumState.setExecuting("", snippet + (params.code.length > 40 ? "..." : ""))
+    QuantumState.setKernels("", (QuantumState.get().instances.find((i) => i.name === "")?.kernels ?? 0) + 1)
 
-    return {
-      title: result.status === "ok" ? "Executed successfully" : "Execution failed",
-      metadata: { status: result.status },
-      output,
+    try {
+      const result = await Jupyter.executeCode(session, params.code, {
+        timeout: params.timeout,
+        kernelName: params.kernel,
+        signal: ctx.abort,
+      })
+
+      const output = [
+        result.stdout ? `stdout:\n${result.stdout}` : null,
+        result.stderr ? `stderr:\n${result.stderr}` : null,
+        `\nExecution status: ${result.status}`,
+        result.error ? `Error: ${result.error.name}: ${result.error.value}` : null,
+      ].filter(Boolean).join("\n")
+
+      return {
+        title: result.status === "ok" ? "Executed successfully" : "Execution failed",
+        metadata: { status: result.status },
+        output,
+      }
+    } finally {
+      // Clear execution indicator
+      QuantumState.setExecuting("", undefined)
+      const kernels = Math.max(0, (QuantumState.get().instances.find((i) => i.name === "")?.kernels ?? 1) - 1)
+      QuantumState.setKernels("", kernels)
     }
   },
 })

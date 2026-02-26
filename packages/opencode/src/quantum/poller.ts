@@ -52,7 +52,7 @@ async function tick() {
   const now = Date.now()
   const s = state()
   const hasActive = (quantum.jobs?.active.length ?? 0) > 0
-  const computeRunning = quantum.compute?.status === "running" || quantum.compute?.status === "starting"
+  const computeRunning = quantum.instances.some((i) => i.status === "running" || i.status === "starting")
 
   // Credits: always refresh on interval
   if (now - s.lastCredits >= CREDITS_INTERVAL) {
