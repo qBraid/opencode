@@ -38,6 +38,9 @@ const QuantumDeviceSchema = z.object({
     perTask: z.number().optional(),
     perMinute: z.number().optional(),
   }).nullable().optional(),
+  queueDepth: z.number().nullable().optional(),
+  description: z.string().nullable().optional(),
+  modality: z.string().nullable().optional(),
 }).passthrough().transform((d) => ({
   id: d.qrn ?? d._id ?? "",
   name: d.name,
@@ -48,6 +51,9 @@ const QuantumDeviceSchema = z.object({
   qubits: d.numberQubits ?? 0,
   paradigm: d.paradigm,
   pricing: d.pricing ?? undefined,
+  queueDepth: d.queueDepth ?? 0,
+  description: d.description ?? undefined,
+  modality: d.modality ?? undefined,
 }))
 
 const QuantumJobSchema = z.object({
@@ -363,6 +369,236 @@ export async function listActiveJobs(signal?: AbortSignal): Promise<QuantumJob[]
     ? data
     : (data as { data?: unknown[] }).data ?? []
   return arr.map((j: unknown) => QuantumJobSchema.parse(j))
+}
+
+// --- Environment types & functions ---
+
+const EnvironmentSchema = z.object({
+  _id: z.string().optional(),
+  slug: z.string(),
+  name: z.string(),
+  description: z.string().default(""),
+  tags: z.array(z.string()).default([]),
+  packagesInImage: z.array(z.string()).default([]),
+  platform: z.array(z.string()).default([]),
+  pythonVersion: z.string().nullable().optional(),
+  status: z.string().default("unknown"),
+  visibility: z.string().default("private"),
+}).passthrough().transform((e) => ({
+  slug: e.slug,
+  name: e.name,
+  description: e.description,
+  tags: e.tags,
+  packages: e.packagesInImage,
+  platform: e.platform,
+  python: e.pythonVersion ?? undefined,
+  status: e.status,
+  visibility: e.visibility,
+}))
+
+export type Environment = z.infer<typeof EnvironmentSchema>
+
+const ComputeProfileSchema = z.object({
+  slug: z.string(),
+  display_name: z.string().default(""),
+  description: z.string().default(""),
+  plan: z.union([z.string(), z.array(z.string())]).default("Free"),
+  rateDollar: z.number().default(0),
+  rateTimeFrame: z.string().default("min"),
+  gpu: z.boolean().default(false),
+  ide: z.string().default("jupyterlab"),
+  hasCapacity: z.boolean().default(false),
+  creditCost: z.number().optional(),
+  kubespawner_override: z.object({
+    cpu_guarantee: z.number().optional(),
+    cpu_limit: z.number().optional(),
+    mem_limit: z.string().optional(),
+    mem_guarantee: z.string().optional(),
+  }).optional(),
+}).passthrough().transform((p) => ({
+  slug: p.slug,
+  name: p.display_name,
+  description: p.description,
+  plan: Array.isArray(p.plan) ? p.plan.join(", ") : p.plan,
+  rate: `${p.rateDollar}/${p.rateTimeFrame}`,
+  creditCost: p.creditCost,
+  gpu: p.gpu,
+  ide: p.ide,
+  available: p.hasCapacity,
+  cpu: p.kubespawner_override?.cpu_limit,
+  memory: p.kubespawner_override?.mem_limit,
+}))
+
+export type ComputeProfile = z.infer<typeof ComputeProfileSchema>
+
+const ServerStatusSchema = z.object({
+  serverRunning: z.boolean().default(false),
+  serverStarting: z.boolean().optional(),
+  clusterId: z.string().optional(),
+  currentProfile: z.string().nullable().optional(),
+}).passthrough().transform((s) => ({
+  running: s.serverRunning,
+  starting: s.serverStarting ?? false,
+  clusterId: s.clusterId,
+  profile: s.currentProfile ?? undefined,
+}))
+
+export type ServerStatus = z.infer<typeof ServerStatusSchema>
+
+const UserContextSchema = z.object({
+  user: z.object({
+    id: z.string(),
+    email: z.string(),
+    userName: z.string().default(""),
+    personalInformation: z.object({
+      firstName: z.string().default(""),
+      lastName: z.string().default(""),
+    }).optional(),
+  }),
+  organizations: z.record(z.string(), z.object({
+    name: z.string(),
+    subscriptionTier: z.string().default("Free"),
+    roles: z.array(z.string()).default([]),
+    wallet: z.object({
+      qbraidCredits: z.number().default(0),
+      awsCredits: z.number().default(0),
+    }).optional(),
+    diskUsage: z.object({
+      totalGB: z.number().default(0),
+      quotaGB: z.number().default(0),
+    }).optional(),
+  }).passthrough()).default({}),
+}).passthrough()
+
+export type UserContext = z.infer<typeof UserContextSchema>
+
+/**
+ * List software environments available to the user.
+ */
+export async function listEnvironments(
+  filters?: { limit?: number; page?: number },
+  signal?: AbortSignal,
+): Promise<{ environments: Environment[]; total: number }> {
+  const params = new URLSearchParams()
+  if (filters?.limit) params.set("limit", String(filters.limit))
+  if (filters?.page) params.set("page", String(filters.page))
+  const query = params.toString()
+  const data = await request<unknown>("GET", `/environments${query ? `?${query}` : ""}`, undefined, signal)
+  const wrapper = data as { data?: unknown[]; pagination?: { total?: number } }
+  const arr = wrapper.data ?? []
+  return {
+    environments: arr.map((e: unknown) => EnvironmentSchema.parse(e)),
+    total: wrapper.pagination?.total ?? arr.length,
+  }
+}
+
+/**
+ * Get details for a specific environment by slug.
+ */
+export async function getEnvironment(slug: string, signal?: AbortSignal): Promise<Environment> {
+  const data = await request<unknown>("GET", `/environments/${encodeURIComponent(slug)}`, undefined, signal)
+  const inner = (data as { data?: unknown }).data ?? data
+  return EnvironmentSchema.parse(inner)
+}
+
+/**
+ * List available compute profiles (server configurations).
+ */
+export async function listComputeProfiles(
+  filters?: { gpu?: boolean },
+  signal?: AbortSignal,
+): Promise<ComputeProfile[]> {
+  const params = new URLSearchParams()
+  if (filters?.gpu !== undefined) params.set("gpu", String(filters.gpu))
+  params.set("limit", "50")
+  const query = params.toString()
+  const data = await request<unknown>("GET", `/compute/profiles?${query}`, undefined, signal)
+  const arr = (data as { data?: unknown[] }).data ?? []
+  return arr.map((p: unknown) => ComputeProfileSchema.parse(p))
+}
+
+/**
+ * Get detailed compute server status.
+ * More detailed than getComputeStatus — returns full server info.
+ */
+export async function getServerStatus(signal?: AbortSignal): Promise<ServerStatus> {
+  try {
+    const data = await request<unknown>("GET", "/compute/servers/status", undefined, signal)
+    const inner = (data as { data?: unknown }).data ?? data
+    return ServerStatusSchema.parse(inner)
+  } catch {
+    return { running: false, starting: false, clusterId: undefined, profile: undefined }
+  }
+}
+
+/**
+ * Start a compute server with a specific profile.
+ */
+export async function startServer(
+  profileSlug: string,
+  signal?: AbortSignal,
+): Promise<{ message: string; status: string }> {
+  const data = await request<unknown>("POST", "/compute/servers/start", { profileSlug }, signal)
+  const inner = (data as { data?: { message?: string; status?: string } }).data ?? {}
+  return { message: inner.message ?? "Starting", status: inner.status ?? "starting" }
+}
+
+/**
+ * Stop the running compute server.
+ */
+export async function stopServer(signal?: AbortSignal): Promise<{ message: string; status: string }> {
+  const data = await request<unknown>("DELETE", "/compute/servers/stop", undefined, signal)
+  const inner = (data as { data?: { message?: string; status?: string } }).data ?? {}
+  return { message: inner.message ?? "Stopping", status: inner.status ?? "stopping" }
+}
+
+/**
+ * Get the user's account context (identity, orgs, roles, quotas).
+ */
+export async function getUserContext(signal?: AbortSignal): Promise<UserContext> {
+  const data = await request<unknown>("GET", "/users/context", undefined, signal)
+  const inner = (data as { data?: unknown }).data ?? data
+  return UserContextSchema.parse(inner)
+}
+
+/**
+ * Get the ASCII circuit diagram for a submitted job.
+ */
+export async function getJobCircuit(jobId: string, signal?: AbortSignal): Promise<string> {
+  const data = await request<unknown>(
+    "GET",
+    `/jobs/${encodeURIComponent(jobId)}/program/ascii`,
+    undefined,
+    signal,
+  )
+  const inner = (data as { data?: unknown }).data ?? data
+  if (typeof inner === "string") return inner
+  return String(inner)
+}
+
+/**
+ * Get AI chat usage and quota info.
+ */
+export async function getAIChatUsage(signal?: AbortSignal): Promise<{
+  used: number
+  quota: number
+  remaining: number
+  percentUsed: number
+  renewalDate: string
+  usingCredits: boolean
+  canSend: boolean
+}> {
+  const data = await request<unknown>("GET", "/billing/ai-chat/usage", undefined, signal)
+  const inner = (data as { data?: Record<string, unknown> }).data ?? (data as Record<string, unknown>)
+  return {
+    used: Number(inner.used ?? 0),
+    quota: Number(inner.quota ?? 0),
+    remaining: Number(inner.remaining ?? 0),
+    percentUsed: Number(inner.percentageUsed ?? 0),
+    renewalDate: String(inner.renewalDate ?? ""),
+    usingCredits: Boolean(inner.usingCredits),
+    canSend: Boolean(inner.canSendMessages),
+  }
 }
 
 /**
