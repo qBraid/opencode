@@ -521,11 +521,15 @@ export async function listComputeProfiles(
  * Get a JupyterHub session token for the user's running compute server.
  * The token can authenticate to the Jupyter REST API and kernel WebSocket.
  */
-export async function getSessionToken(signal?: AbortSignal): Promise<{
+export async function getSessionToken(signal?: AbortSignal, serverName?: string): Promise<{
   clusterId: string
   token: { token: string; user: string }
 }> {
-  const data = await request<unknown>("GET", "/compute/servers/session-token", undefined, signal)
+  const params = new URLSearchParams()
+  if (serverName) params.set("serverName", serverName)
+  const query = params.toString()
+  const endpoint = `/compute/servers/session-token${query ? `?${query}` : ""}`
+  const data = await request<unknown>("GET", endpoint, undefined, signal)
   const inner = (data as { data?: Record<string, unknown> }).data ?? (data as Record<string, unknown>)
   const token = inner.token as { token: string; user: string } | undefined
   if (!token?.token || !token?.user) throw new Error("Invalid session token response")

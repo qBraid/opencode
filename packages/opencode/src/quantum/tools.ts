@@ -479,25 +479,47 @@ export const QuantumComputeProfilesTool = Tool.define("quantum_compute_profiles"
 
 export const QuantumComputeStatusTool = Tool.define("quantum_compute_status", {
   description: [
-    "Check the status of your qBraid compute server.",
-    "Shows whether a server is running, starting, or stopped,",
-    "and which profile is active.",
+    "Check the status of all qBraid compute instances.",
+    "Shows every running, starting, or stopped instance with its name, profile, and status.",
+    "You can run multiple named instances simultaneously (limits depend on billing plan).",
   ].join("\n"),
   parameters: z.object({}),
   async execute(_params, ctx) {
-    const status = await client.getServerStatus(ctx.abort)
-
-    const state = status.running ? "running" : status.starting ? "starting" : "stopped"
-    const lines = [
-      `Server status: ${state}`,
-      status.profile ? `Active profile: ${status.profile}` : null,
-      status.clusterId ? `Cluster: ${status.clusterId}` : null,
-    ].filter(Boolean)
-
-    return {
-      title: `Compute: ${state}`,
-      metadata: { running: status.running, starting: status.starting },
-      output: lines.join("\n"),
+    // Try multi-instance listServers first, fall back to legacy
+    try {
+      const result = await client.listServers(ctx.abort)
+      if (result.servers.length === 0) {
+        return {
+          title: "No compute instances",
+          metadata: { count: 0 },
+          output: "No compute instances are running. Use quantum_compute_start to launch one.",
+        }
+      }
+      const lines = result.servers.map((s) => {
+        const name = s.name || "(default)"
+        return `${name} | ${s.profile ?? "unknown"} | ${s.status}${s.startedAt ? ` | started ${s.startedAt}` : ""}`
+      })
+      const header = "Name | Profile | Status | Started"
+      return {
+        title: `${result.servers.length} compute instance(s)`,
+        metadata: { count: result.servers.length },
+        output: [header, "-".repeat(80), ...lines].join("\n"),
+      }
+    } catch {
+      // Fall back to legacy single-server status
+      const status = await client.getServerStatus(ctx.abort)
+      const st = status.running ? "running" : status.starting ? "starting" : "stopped"
+      const count = st === "stopped" ? 0 : 1
+      const lines = [
+        `Server status: ${st}`,
+        status.profile ? `Active profile: ${status.profile}` : null,
+        status.clusterId ? `Cluster: ${status.clusterId}` : null,
+      ].filter(Boolean)
+      return {
+        title: `Compute: ${st}`,
+        metadata: { count },
+        output: lines.join("\n"),
+      }
     }
   },
 })
@@ -508,44 +530,52 @@ export const QuantumComputeStatusTool = Tool.define("quantum_compute_status", {
 
 export const QuantumComputeStartTool = Tool.define("quantum_compute_start", {
   description: [
-    "Start a qBraid compute server with a specific profile.",
-    "This launches a JupyterLab or VS Code instance in the cloud.",
+    "Start a qBraid compute instance with a specific profile.",
+    "You can run MULTIPLE named instances simultaneously (limits depend on billing plan).",
+    "Provide a unique name to launch additional instances alongside existing ones.",
+    "Omit name to use the default (unnamed) instance.",
     "Use quantum_compute_profiles to see available profiles first.",
-    "Starting a server costs credits per minute while running.",
+    "Starting an instance costs credits per minute while running.",
   ].join("\n"),
   parameters: z.object({
     profile: z.string().describe("The compute profile slug (e.g., '2vCPU_4GB', '4vCPU_16GB_GPU')."),
+    name: z.string().optional().describe("Optional instance name for multi-instance. Use unique names like 'gpu-1', 'sim-worker'. Omit for the default instance."),
   }),
   async execute(params, ctx) {
+    const label = params.name ? `${params.name} (${params.profile})` : params.profile
     await ctx.ask({
       permission: "compute_start",
-      patterns: [params.profile],
+      patterns: [label],
       always: [],
       metadata: {
         profile: params.profile,
-        summary: `Start compute server with profile: ${params.profile}`,
+        name: params.name,
+        summary: `Start compute instance${params.name ? ` "${params.name}"` : ""} with profile: ${params.profile}`,
       },
     })
 
-    // Optimistically show instance in sidebar immediately
-    QuantumState.instanceStarting("", params.profile)
+    const serverName = params.name ?? ""
 
-    const result = await client.startServer(params.profile, ctx.abort)
+    // Optimistically show instance in sidebar immediately
+    QuantumState.instanceStarting(serverName, params.profile)
+
+    const result = await client.startServer(params.profile, ctx.abort, params.name)
 
     // Refresh with real status from API
     QuantumState.refreshCompute().catch(() => {})
 
     return {
-      title: `Server ${result.status}`,
-      metadata: { profile: params.profile, status: result.status },
+      title: `Instance ${result.status}${params.name ? `: ${params.name}` : ""}`,
+      metadata: { profile: params.profile, name: params.name, status: result.status },
       output: [
+        params.name ? `Instance: ${params.name}` : null,
         `Status: ${result.status}`,
         `Profile: ${params.profile}`,
         result.message,
         "",
-        "The server may take 1-3 minutes to fully start.",
+        "The instance may take 1-3 minutes to fully start.",
         "Use quantum_compute_status to check when it's ready.",
-      ].join("\n"),
+      ].filter(Boolean).join("\n"),
     }
   },
 })
@@ -555,25 +585,33 @@ export const QuantumComputeStartTool = Tool.define("quantum_compute_start", {
 // ============================================================================
 
 export const QuantumComputeStopTool = Tool.define("quantum_compute_stop", {
-  description: "Stop your running qBraid compute server. Requires user confirmation.",
-  parameters: z.object({}),
-  async execute(_params, ctx) {
+  description: [
+    "Stop a running qBraid compute instance. Requires user confirmation.",
+    "Provide the instance name to stop a specific named instance.",
+    "Omit name to stop the default (unnamed) instance.",
+  ].join("\n"),
+  parameters: z.object({
+    name: z.string().optional().describe("Instance name to stop. Omit to stop the default instance."),
+  }),
+  async execute(params, ctx) {
+    const label = params.name ?? "default"
     await ctx.ask({
       permission: "compute_stop",
-      patterns: [],
+      patterns: [label],
       always: [],
       metadata: {
-        summary: "Stop your qBraid compute server",
+        name: params.name,
+        summary: `Stop compute instance${params.name ? ` "${params.name}"` : ""}`,
       },
     })
 
-    const result = await client.stopServer(ctx.abort)
+    const result = await client.stopServer(ctx.abort, params.name)
 
     QuantumState.refreshCompute().catch(() => {})
 
     return {
-      title: `Server ${result.status}`,
-      metadata: { status: result.status },
+      title: `Instance ${result.status}${params.name ? `: ${params.name}` : ""}`,
+      metadata: { name: params.name, status: result.status },
       output: `${result.message}\nStatus: ${result.status}`,
     }
   },
@@ -673,15 +711,26 @@ export const QuantumJobCircuitTool = Tool.define("quantum_job_circuit", {
 // Jupyter session helper — shared by all remote tools
 // ============================================================================
 
-async function resolveJupyterSession(signal?: AbortSignal): Promise<Jupyter.JupyterSession> {
-  const status = await client.getServerStatus(signal)
-  if (!status.running) {
-    throw new Error(
-      "Compute server is not running. Use quantum_compute_start to launch one first.",
-    )
+async function resolveJupyterSession(signal?: AbortSignal, serverName?: string): Promise<Jupyter.JupyterSession> {
+  // For named instances, check via listServers; for default, use legacy status
+  if (serverName) {
+    const result = await client.listServers(signal)
+    const srv = result.servers.find((s) => s.name === serverName)
+    if (!srv || srv.status !== "running") {
+      throw new Error(
+        `Compute instance "${serverName}" is not running. Use quantum_compute_start with name="${serverName}" to launch it first.`,
+      )
+    }
+  } else {
+    const status = await client.getServerStatus(signal)
+    if (!status.running) {
+      throw new Error(
+        "Compute server is not running. Use quantum_compute_start to launch one first.",
+      )
+    }
   }
 
-  const data = await client.getSessionToken(signal)
+  const data = await client.getSessionToken(signal, serverName)
   return Jupyter.sessionFromApi(data)
 }
 
@@ -691,27 +740,30 @@ async function resolveJupyterSession(signal?: AbortSignal): Promise<Jupyter.Jupy
 
 export const QuantumRemoteExecTool = Tool.define("quantum_remote_exec", {
   description: [
-    "Execute Python code on the user's running qBraid compute server.",
-    "The code runs in a fresh Python kernel on the cloud server,",
+    "Execute Python code on a running qBraid compute instance.",
+    "The code runs in a fresh Python kernel on the cloud instance,",
     "with access to all installed packages (Qiskit, Cirq, PennyLane, etc.).",
     "Returns stdout, stderr, and execution status.",
-    "REQUIRES a running compute server — use quantum_compute_start first.",
-    "Use quantum_compute_status to check if the server is running.",
+    "Provide instance name to target a specific named instance.",
+    "REQUIRES a running compute instance — use quantum_compute_start first.",
   ].join("\n"),
   parameters: z.object({
-    code: z.string().describe("Python code to execute on the remote server."),
+    code: z.string().describe("Python code to execute on the remote instance."),
     timeout: z.number().int().min(1000).max(120000).default(30000)
       .describe("Execution timeout in milliseconds. Default 30s, max 120s."),
     kernel: z.string().default("python3")
       .describe("Kernel name to use (default: python3). Use quantum_remote_kernels to see available kernels."),
+    instance: z.string().optional()
+      .describe("Instance name to execute on. Omit for the default instance."),
   }),
   async execute(params, ctx) {
-    const session = await resolveJupyterSession(ctx.abort)
+    const name = params.instance ?? ""
+    const session = await resolveJupyterSession(ctx.abort, params.instance)
 
     // Show execution status in sidebar
     const snippet = params.code.split("\n")[0].slice(0, 40)
-    QuantumState.setExecuting("", snippet + (params.code.length > 40 ? "..." : ""))
-    QuantumState.setKernels("", (QuantumState.get().instances.find((i) => i.name === "")?.kernels ?? 0) + 1)
+    QuantumState.setExecuting(name, snippet + (params.code.length > 40 ? "..." : ""))
+    QuantumState.setKernels(name, (QuantumState.get().instances.find((i) => i.name === name)?.kernels ?? 0) + 1)
 
     try {
       const result = await Jupyter.executeCode(session, params.code, {
@@ -721,6 +773,7 @@ export const QuantumRemoteExecTool = Tool.define("quantum_remote_exec", {
       })
 
       const output = [
+        params.instance ? `Instance: ${params.instance}` : null,
         result.stdout ? `stdout:\n${result.stdout}` : null,
         result.stderr ? `stderr:\n${result.stderr}` : null,
         `\nExecution status: ${result.status}`,
@@ -729,14 +782,14 @@ export const QuantumRemoteExecTool = Tool.define("quantum_remote_exec", {
 
       return {
         title: result.status === "ok" ? "Executed successfully" : "Execution failed",
-        metadata: { status: result.status },
+        metadata: { status: result.status, instance: params.instance },
         output,
       }
     } finally {
       // Clear execution indicator
-      QuantumState.setExecuting("", undefined)
-      const kernels = Math.max(0, (QuantumState.get().instances.find((i) => i.name === "")?.kernels ?? 1) - 1)
-      QuantumState.setKernels("", kernels)
+      QuantumState.setExecuting(name, undefined)
+      const kernels = Math.max(0, (QuantumState.get().instances.find((i) => i.name === name)?.kernels ?? 1) - 1)
+      QuantumState.setKernels(name, kernels)
     }
   },
 })
@@ -747,16 +800,18 @@ export const QuantumRemoteExecTool = Tool.define("quantum_remote_exec", {
 
 export const QuantumRemoteFilesTool = Tool.define("quantum_remote_files", {
   description: [
-    "List files and directories on the user's qBraid compute server.",
+    "List files and directories on a qBraid compute instance.",
     "Shows the remote workspace filesystem.",
-    "REQUIRES a running compute server.",
+    "REQUIRES a running compute instance.",
   ].join("\n"),
   parameters: z.object({
     path: z.string().default("")
       .describe("Directory path to list. Empty string for root."),
+    instance: z.string().optional()
+      .describe("Instance name to list files on. Omit for the default instance."),
   }),
   async execute(params, ctx) {
-    const session = await resolveJupyterSession(ctx.abort)
+    const session = await resolveJupyterSession(ctx.abort, params.instance)
     const files = await Jupyter.listFiles(session, params.path, ctx.abort)
 
     if (files.length === 0) {
@@ -793,15 +848,17 @@ function formatSize(bytes: number): string {
 
 export const QuantumRemoteReadTool = Tool.define("quantum_remote_read", {
   description: [
-    "Read the contents of a file on the user's qBraid compute server.",
+    "Read the contents of a file on a qBraid compute instance.",
     "Works with text files, Python scripts, and Jupyter notebooks.",
-    "REQUIRES a running compute server.",
+    "REQUIRES a running compute instance.",
   ].join("\n"),
   parameters: z.object({
     path: z.string().describe("File path to read (e.g., 'my_circuit.py')."),
+    instance: z.string().optional()
+      .describe("Instance name to read from. Omit for the default instance."),
   }),
   async execute(params, ctx) {
-    const session = await resolveJupyterSession(ctx.abort)
+    const session = await resolveJupyterSession(ctx.abort, params.instance)
     const content = await Jupyter.readFile(session, params.path, ctx.abort)
 
     return {
@@ -818,18 +875,20 @@ export const QuantumRemoteReadTool = Tool.define("quantum_remote_read", {
 
 export const QuantumRemoteWriteTool = Tool.define("quantum_remote_write", {
   description: [
-    "Write a file to the user's qBraid compute server.",
+    "Write a file to a qBraid compute instance.",
     "Creates or overwrites a file in the remote workspace.",
     "Use this to upload Python scripts, quantum circuits, or notebooks",
     "before executing them with quantum_remote_exec.",
-    "REQUIRES a running compute server.",
+    "REQUIRES a running compute instance.",
   ].join("\n"),
   parameters: z.object({
     path: z.string().describe("File path to write (e.g., 'bell_state.py')."),
     content: z.string().describe("File content to write."),
+    instance: z.string().optional()
+      .describe("Instance name to write to. Omit for the default instance."),
   }),
   async execute(params, ctx) {
-    const session = await resolveJupyterSession(ctx.abort)
+    const session = await resolveJupyterSession(ctx.abort, params.instance)
     await Jupyter.writeFile(session, params.path, params.content, ctx.abort)
 
     return {
@@ -846,13 +905,16 @@ export const QuantumRemoteWriteTool = Tool.define("quantum_remote_write", {
 
 export const QuantumRemoteKernelsTool = Tool.define("quantum_remote_kernels", {
   description: [
-    "List available Jupyter kernels on the user's qBraid compute server.",
+    "List available Jupyter kernels on a qBraid compute instance.",
     "Shows which Python environments and languages are available for execution.",
-    "REQUIRES a running compute server.",
+    "REQUIRES a running compute instance.",
   ].join("\n"),
-  parameters: z.object({}),
-  async execute(_params, ctx) {
-    const session = await resolveJupyterSession(ctx.abort)
+  parameters: z.object({
+    instance: z.string().optional()
+      .describe("Instance name to list kernels on. Omit for the default instance."),
+  }),
+  async execute(params, ctx) {
+    const session = await resolveJupyterSession(ctx.abort, params.instance)
     const kernels = await Jupyter.listKernelSpecs(session, ctx.abort)
 
     if (kernels.length === 0) {
