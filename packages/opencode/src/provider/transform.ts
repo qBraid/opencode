@@ -670,6 +670,11 @@ export namespace ProviderTransform {
       result["promptCacheKey"] = input.sessionID
     }
 
+    // Enable quantum-aware RAG for all qBraid models
+    if (input.model.providerID === "qbraid") {
+      result["rag"] = true
+    }
+
     return result
   }
 
@@ -699,6 +704,9 @@ export namespace ProviderTransform {
         return { reasoning: { enabled: false } }
       }
       return { reasoningEffort: "minimal" }
+    }
+    if (model.providerID === "qbraid") {
+      return { rag: true }
     }
     return {}
   }
