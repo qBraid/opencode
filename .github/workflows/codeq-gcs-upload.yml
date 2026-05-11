@@ -1,6 +1,8 @@
 name: Upload CodeQ to GCS
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -19,10 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: linux-x64
-            build-os: linux
-            build-arch: x64
           - os: ubuntu-latest
             target: linux-arm64
             build-os: linux
@@ -190,7 +188,7 @@ jobs:
 
           echo ""
           echo "Download URLs:"
-          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
+          for target in darwin-arm64 darwin-x64 linux-arm64 windows-x64; do
             echo "  $target: https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/$target/codeq"
           done
 
@@ -205,7 +203,6 @@ jobs:
               "darwin-arm64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/darwin-arm64/codeq",
               "darwin-x64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/darwin-x64/codeq",
               "linux-arm64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/linux-arm64/codeq",
-              "linux-x64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/linux-x64/codeq",
               "windows-x64": "https://storage.googleapis.com/${{ env.GCS_BUCKET }}/$VERSION/windows-x64/codeq.exe"
             }
           }
