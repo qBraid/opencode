@@ -1,0 +1,17 @@
+name: enforce-staging-source
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify PR source branch is staging
+        run: |
+          if [ "${{ github.head_ref }}" != "staging" ]; then
+            echo "::error::PRs to main must come from the staging branch only."
+            echo "Current head branch: ${{ github.head_ref }}"
+            exit 1
+          fi
+          echo "OK: PR source branch is staging."
