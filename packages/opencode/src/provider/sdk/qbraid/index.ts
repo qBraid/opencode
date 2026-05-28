@@ -16,7 +16,7 @@ export interface QBraidProviderSettings {
 
   /**
    * Base URL for the qBraid API calls.
-   * Defaults to https://api.qbraid.com/ai/v1
+   * Defaults to https://account.qbraid.com/api/ai/v1
    */
   baseURL?: string
 
@@ -148,7 +148,7 @@ function createThoughtSignatureExtractor() {
  * to capture Gemini 3 thought signatures from tool calls.
  */
 export function createQBraid(options: QBraidProviderSettings = {}): (modelId: string) => LanguageModelV2 {
-  const baseURL = withoutTrailingSlash(options.baseURL ?? "https://api.qbraid.com/ai/v1")
+  const baseURL = withoutTrailingSlash(options.baseURL ?? "https://account.qbraid.com/api/ai/v1")
 
   const headers = {
     ...(options.apiKey && { Authorization: `Bearer ${options.apiKey}` }),

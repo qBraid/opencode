@@ -27,6 +27,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { createOpenRouter, type LanguageModelV2 } from "@openrouter/ai-sdk-provider"
 import { createOpenaiCompatible as createGitHubCopilotOpenAICompatible } from "./sdk/copilot"
 import { createQBraid } from "./sdk/qbraid"
+import { QBRAID_MODELS_DEV, QBRAID_BASE_URL } from "./qbraid-models"
 import { createXai } from "@ai-sdk/xai"
 import { createMistral } from "@ai-sdk/mistral"
 import { createGroq } from "@ai-sdk/groq"
@@ -531,6 +532,27 @@ export namespace Provider {
         },
       }
     },
+    qbraid: async (input) => {
+      // Resolve credential from env or stored auth (set via `opencode auth login`).
+      const apiKey = await (async () => {
+        const envKey = Env.get("QBRAID_API_KEY")
+        if (envKey) return envKey
+        const auth = await Auth.get(input.id)
+        if (auth?.type === "api") return auth.key
+        return undefined
+      })()
+      if (!apiKey) return { autoload: false }
+      return {
+        autoload: true,
+        options: {
+          apiKey,
+          baseURL: QBRAID_BASE_URL,
+        },
+        async getModel(sdk: any, modelID: string) {
+          return sdk(modelID)
+        },
+      }
+    },
   }
 
   export const Model = z
@@ -702,6 +724,14 @@ export namespace Provider {
     const config = await Config.get()
     const modelsDev = await ModelsDev.get()
     const database = mapValues(modelsDev, fromModelsDevProvider)
+
+    // Built-in qBraid provider: inject our model catalog directly so the
+    // `qbraid` provider is first-class and does not depend on an external
+    // models.dev entry being present. Config-provided overrides still win
+    // because config providers are merged after this point.
+    if (!database["qbraid"]) {
+      database["qbraid"] = fromModelsDevProvider(QBRAID_MODELS_DEV)
+    }
 
     const disabled = new Set(config.disabled_providers ?? [])
     const enabled = config.enabled_providers ? new Set(config.enabled_providers) : null
