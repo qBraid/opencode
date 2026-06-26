@@ -1,9 +1,11 @@
 - To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
 - ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
-- The default branch in this repo is `dev`.
-- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
+- This repo is qBraid's branded fork of upstream `opencode`, referred to internally as **CodeQ**. The GitHub repo is `qBraid/opencode` (`origin`).
+- The ONLY permitted interaction with the upstream repo is **pulling changes from it**. NEVER open PRs, push branches, comment, or perform any other write operation against upstream. All PRs and pushes target `origin` (`qBraid/opencode`) only. When using `gh pr create`, always pass `--repo qBraid/opencode` explicitly.
+- Branch model: qBraid's own branches are `staging` (pre-prod) and `main` (prod). `dev` is the **upstream-tracking mirror** of `sst/opencode` (whose own default branch is `dev`); it is NOT where qBraid work lands. The GitHub default branch is `main`.
+- Where to target: qBraid changes (branding, model surface, features) PR into `staging`, then promote `staging` → `main`. Upstream syncs merge `upstream/dev` → qBraid `dev`, then merge `dev` up into `staging`/`main`. NEVER PR features directly into `main`, and never treat `dev` as an integration branch for qBraid work.
+- Branch → CI conventions: pushes to `main` and `staging` trigger the **prod** and **staging** Cloud Build pipelines respectively, which build and upload the `codeq` linux-x64 binary. `dev` has no CI trigger. These triggers are defined in the `qbraid-infrastructure` repo: `opencode-prod-main` watches `^main$` → `gs://qbraid-codeq/latest/linux-x64/codeq` (`terraform/environments/prod/gcp/cloud-build-codeq.tf`); `opencode-staging-branch` watches `^staging$` → `gs://qbraid-codeq-staging/latest/linux-x64/codeq` (`terraform/environments/staging/gcp/cloud-build-codeq.tf`).
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
-- This is a fork of `sst/opencode` (upstream). NEVER open PRs, push branches, or perform any write operations against the upstream repo. All PRs and pushes must target `origin` (`qBraid/opencode`) only. When using `gh pr create`, always pass `--repo qBraid/opencode` explicitly.
 
 ## Style Guide
 
@@ -111,3 +113,17 @@ const table = sqliteTable("session", {
 
 - Avoid mocks as much as possible
 - Test actual implementation, do not duplicate logic into tests
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on the `qBraid/opencode` fork (via the `gh` CLI, scoped to `--repo qBraid/opencode`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical triage roles map 1:1 to default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
