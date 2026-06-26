@@ -1,0 +1,22 @@
+# Trivy ignore file for the CodeQ CLI dependency security gate.
+#
+# This file is consumed by the qbraid-infrastructure Cloud Build triggers
+# (opencode-staging-branch / opencode-prod-main) which scan ONLY the shipped
+# CodeQ CLI dependency closure (see script/cli-scan-manifest.ts).
+#
+# Every entry MUST carry a justification and be re-evaluated on dependency bumps.
+
+# ---------------------------------------------------------------------------
+# undici 5.29.0 — three WebSocket-related Denial-of-Service CVEs.
+#
+# undici reaches the shipped binary ONLY transitively via
+#   @actions/github -> @actions/http-client
+# which pins undici "^5" and uses it strictly as an HTTP(S) client for GitHub
+# REST calls in `codeq github` mode. All three CVEs are in undici's WebSocket /
+# permessage-deflate handling, which the CLI never invokes. Fixes exist only in
+# undici 6.27+/7.28+/8.5+; forcing a major bump breaks @actions/http-client's
+# undici 5.x API. Re-evaluate if @actions/github releases a version that bumps
+# undici past 5.x.
+CVE-2026-12151
+CVE-2026-1526
+CVE-2026-2229

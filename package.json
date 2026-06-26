@@ -42,7 +42,7 @@
       "diff": "8.0.2",
       "dompurify": "3.3.1",
       "ai": "5.0.124",
-      "hono": "4.10.7",
+      "hono": "4.12.25",
       "hono-openapi": "1.1.2",
       "fuzzysort": "3.1.0",
       "luxon": "3.6.1",
@@ -99,7 +99,8 @@
   ],
   "overrides": {
     "@types/bun": "catalog:",
-    "@types/node": "catalog:"
+    "@types/node": "catalog:",
+    "seroval": "1.4.1"
   },
   "patchedDependencies": {}
 }
