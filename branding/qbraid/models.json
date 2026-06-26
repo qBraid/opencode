@@ -6,11 +6,11 @@
     "npm": "@ai-sdk/qbraid",
     "api": "https://account-v2.qbraid.com/api/ai/v1",
     "models": {
-      "claude-opus-4-6": {
-        "id": "claude-opus-4-6",
-        "name": "Claude 4.6 Opus",
+      "claude-opus-4-8": {
+        "id": "claude-opus-4-8",
+        "name": "Claude Opus 4.8",
         "family": "claude-opus",
-        "release_date": "2026-02-06",
+        "release_date": "2026-05-20",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -21,21 +21,19 @@
         },
         "cost": {
           "input": 5,
-          "output": 25,
-          "cache_read": 0.5,
-          "cache_write": 6.25
+          "output": 25
         },
         "limit": {
-          "context": 200000,
+          "context": 1000000,
           "output": 64000
         },
         "options": {}
       },
-      "claude-sonnet-4-5": {
-        "id": "claude-sonnet-4-5",
-        "name": "Claude 4.5 Sonnet",
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
         "family": "claude-sonnet",
-        "release_date": "2025-09-29",
+        "release_date": "2026-03-24",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -46,19 +44,17 @@
         },
         "cost": {
           "input": 3,
-          "output": 15,
-          "cache_read": 0.3,
-          "cache_write": 3.75
+          "output": 15
         },
         "limit": {
-          "context": 200000,
+          "context": 1000000,
           "output": 64000
         },
         "options": {}
       },
       "claude-haiku-4-5": {
         "id": "claude-haiku-4-5",
-        "name": "Claude 4.5 Haiku",
+        "name": "Claude Haiku 4.5",
         "family": "claude-haiku",
         "release_date": "2025-10-15",
         "attachment": true,
@@ -71,9 +67,7 @@
         },
         "cost": {
           "input": 1,
-          "output": 5,
-          "cache_read": 0.1,
-          "cache_write": 1.25
+          "output": 5
         },
         "limit": {
           "context": 200000,
@@ -81,11 +75,11 @@
         },
         "options": {}
       },
-      "gemini-3-pro": {
-        "id": "gemini-3-pro",
-        "name": "Gemini 3 Pro",
+      "gemini-3.1-pro": {
+        "id": "gemini-3.1-pro",
+        "name": "Gemini 3.1 Pro",
         "family": "gemini-pro",
-        "release_date": "2025-11-18",
+        "release_date": "2026-02-12",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -96,13 +90,7 @@
         },
         "cost": {
           "input": 2,
-          "output": 12,
-          "cache_read": 0.2,
-          "context_over_200k": {
-            "input": 4,
-            "output": 18,
-            "cache_read": 0.4
-          }
+          "output": 12
         },
         "limit": {
           "context": 1048576,
@@ -110,11 +98,11 @@
         },
         "options": {}
       },
-      "gemini-3-flash": {
-        "id": "gemini-3-flash",
-        "name": "Gemini 3 Flash",
+      "gemini-3.5-flash": {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
         "family": "gemini-flash",
-        "release_date": "2025-12-17",
+        "release_date": "2026-03-10",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -125,41 +113,11 @@
         },
         "cost": {
           "input": 0.5,
-          "output": 3,
-          "cache_read": 0.05,
-          "context_over_200k": {
-            "input": 0.5,
-            "output": 3,
-            "cache_read": 0.05
-          }
+          "output": 3
         },
         "limit": {
           "context": 1048576,
           "output": 65536
-        },
-        "options": {}
-      },
-      "grok-4.1-fast": {
-        "id": "grok-4.1-fast",
-        "name": "Grok 4.1 Fast",
-        "family": "grok",
-        "release_date": "2025-11-19",
-        "attachment": true,
-        "reasoning": false,
-        "temperature": true,
-        "tool_call": true,
-        "modalities": {
-          "input": ["text", "image"],
-          "output": ["text"]
-        },
-        "cost": {
-          "input": 0.2,
-          "output": 0.5,
-          "cache_read": 0.05
-        },
-        "limit": {
-          "context": 2000000,
-          "output": 30000
         },
         "options": {}
       }

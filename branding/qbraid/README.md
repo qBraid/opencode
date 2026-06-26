@@ -13,7 +13,7 @@ CodeQ is configured by qBraid's platform. The configuration file is placed at:
 
 ```json
 {
-  "model": "qbraid/claude-sonnet-4-5",
+  "model": "qbraid/gemini-3.5-flash",
   "provider": {
     "qbraid": {
       "options": {
@@ -29,12 +29,13 @@ CodeQ is configured by qBraid's platform. The configuration file is placed at:
 
 CodeQ provides access to the following models through qBraid:
 
-| Model ID                   | Name              | Features                            |
-| -------------------------- | ----------------- | ----------------------------------- |
-| `qbraid/claude-sonnet-4-5` | Claude 4.5 Sonnet | Reasoning, attachments, tool calls  |
-| `qbraid/claude-haiku-4-5`  | Claude 4.5 Haiku  | Fast, attachments, tool calls       |
-| `qbraid/gemini-3-flash`    | Gemini 3 Flash    | 1M context, attachments, tool calls |
-| `qbraid/grok-4.1-fast`     | Grok 4.1 Fast     | Attachments, tool calls             |
+| Model ID                  | Name             | Features                                 |
+| ------------------------- | ---------------- | ---------------------------------------- |
+| `qbraid/claude-opus-4-8`  | Claude Opus 4.8  | Reasoning, 1M context, attachments, tools |
+| `qbraid/claude-sonnet-4-6`| Claude Sonnet 4.6| Reasoning, 1M context, attachments, tools |
+| `qbraid/claude-haiku-4-5` | Claude Haiku 4.5 | Fast, reasoning, attachments, tools      |
+| `qbraid/gemini-3.1-pro`   | Gemini 3.1 Pro   | Reasoning, 1M context, multimodal, tools |
+| `qbraid/gemini-3.5-flash` | Gemini 3.5 Flash | Fast, 1M context, multimodal, tools      |
 
 List available models:
 
