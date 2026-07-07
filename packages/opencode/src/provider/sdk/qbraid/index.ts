@@ -156,8 +156,16 @@ function createThoughtSignatureExtractor() {
 // request is doomed anyway, and IAP's alternative (a 302 to a Google login page)
 // is far harder to diagnose through the OpenAI-compatible client.
 
-const IAP_METADATA_IDENTITY_URL =
-  "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+// Reach the metadata server by its link-local IP, not the
+// metadata.google.internal hostname. In GKE pods, resolv.conf sets ndots:5 with
+// a long search list, and Bun's DNS resolver (unlike glibc, which curl and Node
+// use) stalls resolving the hostname through that search-domain expansion — so
+// the hostname form times out under Bun even though curl/Node resolve it in
+// milliseconds. The IP is the canonical, DNS-free GCE metadata address. Honor
+// GCE_METADATA_HOST (host[:port]) as an override, matching the Google
+// auth-library convention.
+const IAP_METADATA_HOST = process.env["GCE_METADATA_HOST"]?.trim() || "169.254.169.254"
+const IAP_METADATA_IDENTITY_URL = `http://${IAP_METADATA_HOST}/computeMetadata/v1/instance/service-accounts/default/identity`
 const IAP_METADATA_TIMEOUT_MS = 5_000
 const IAP_METADATA_ATTEMPTS = 2
 // Refresh this far ahead of the token's exp so in-flight requests never carry an

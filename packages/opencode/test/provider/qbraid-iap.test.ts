@@ -71,3 +71,16 @@ test("fetchIapIdentityToken returns the trimmed token on success", async () => {
   }
   expect(await fetchIapIdentityToken("aud", ok as any)).toBe(token)
 })
+
+test("fetchIapIdentityToken targets the DNS-free metadata IP, not the hostname", async () => {
+  let requestedUrl: string | undefined
+  const ok = async (input: any) => {
+    requestedUrl = String(input)
+    return new Response(fakeJwt(nowSeconds() + 3600))
+  }
+  await fetchIapIdentityToken("aud", ok as any)
+  // Using the literal IP avoids Bun's DNS resolver stalling on
+  // metadata.google.internal under the pod's ndots:5 search-domain expansion.
+  expect(requestedUrl).toContain("169.254.169.254")
+  expect(requestedUrl).not.toContain("metadata.google.internal")
+})
