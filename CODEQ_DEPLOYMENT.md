@@ -334,3 +334,43 @@ Every `build-lab-base` (staging) / `build-lab-base-prod` (prod) run executes an
 passes, a SHA mismatch aborts the build and **`:latest` is never poisoned** — it
 stays on the last-good image. This is the fail-closed guard on the staging
 auto-rebuild and runs on every prod rebuild; no operator action required.
+
+## Staging auto-rebuild (codeq push → build-lab-base)
+
+**Status: enabled.** Implements Phase 1 of the layer-1 rebuild-mechanism decision (qBraid/opencode#19), closing the HOP-2 gap: a fresh codeq binary landing in `gs://qbraid-codeq-staging` touches no `qbraid-lab-base/**` file in `qbraid-Dstacks`, so `build-lab-base` never fired on its own — `lab-base:latest` kept the old binary until someone ran the trigger by hand.
+
+### Mechanism
+
+`terraform/environments/staging/gcp/cloud-build-codeq.tf` — `opencode-staging-branch`'s build now ends with a `trigger-lab-base-rebuild` step (after `upload-gcs` and `upload-manifest` both succeed):
+
+```
+gcloud builds triggers run build-lab-base \
+  --project=<staging-project> \
+  --region=<staging-region> \
+  --branch=staging \
+  --impersonate-service-account=codeq-labbase-trigger@<staging-project>.iam.gserviceaccount.com
+```
+
+This is a direct, synchronous trigger-run call — **not** a Pub/Sub topic and **not** a `chain-rebuild-*` trigger. That pattern (the one implicated in the 2026-06-11 cascade post-mortem) is being retired, not extended.
+
+### IAM scoping
+
+Cloud Build does not support trigger-level (resource-scoped) IAM — `cloudbuild.googleapis.com` is not among the services covered by GCP's resource-attribute IAM Conditions, so the `cloudbuild.builds.create` permission that `triggers.run` requires can only be granted at the **project** level; there is no way to bind it to just the `build-lab-base` trigger's resource name.
+
+To minimize blast radius anyway:
+- A new single-purpose service account, `codeq-labbase-trigger@<staging-project>`, holds a **custom role** (`codeqLabBaseTriggerRunnerStaging`) granting **only** `cloudbuild.builds.create` — not the broader `roles/cloudbuild.builds.editor` bundle (which also allows editing/cancelling arbitrary builds and managing triggers).
+- The shared `cloud-build-staging` service account — the executor identity for every staging Cloud Build trigger (foundation, lab-vscode, lab-intel, wheels, jupyterhub, compliance, etc.) — is granted `roles/iam.serviceAccountTokenCreator` scoped to **only that one SA resource** (`google_service_account_iam_member`, not a project-wide grant), so it can impersonate `codeq-labbase-trigger` for exactly this one `gcloud` call. `cloud-build-staging` itself never gains standing `cloudbuild.builds.create` permission.
+- Net effect: if `codeq-labbase-trigger`'s credentials were ever compromised, the worst case is "can run any trigger in the staging project" — it cannot touch prod (separate project and SA) and holds no other permissions.
+
+**Documented limitation:** this grant is project-scoped, not trigger-scoped, because Cloud Build doesn't offer a finer grain today. If GCP later adds trigger-level IAM Conditions, the custom-role binding should be tightened to a condition targeting only `projects/<staging-project>/locations/<region>/triggers/build-lab-base`.
+
+### Anti-cascade guardrails satisfied
+
+- **Narrow target**: fires `build-lab-base` only — never `build-foundation`, never any `docker-stacks-*` trigger.
+- **Per-env + explicit branch**: `--branch=staging` targets only the staging `build-lab-base` trigger; the impersonated SA has run-permission on staging triggers only (separate project from prod's `build-lab-base-prod`).
+- **Idempotent**: `gcloud builds triggers run` is fire-and-forget; a rebuild simply re-pulls `latest/linux-x64/codeq`, so at-least-once firing (e.g. a retried step) is safe — no debounce needed.
+- **No Pub/Sub topic, no `chain-rebuild-*` trigger** introduced.
+
+### Observability and safety
+
+The first auto-rebuild fired by this step is guarded by the #25 fail-closed `assert-codeq-sha` gate in `build-lab-base` (a codeq/manifest SHA mismatch aborts the build before the deferred `:latest` image push, leaving the last-good image in place) and is observable via the #24 SHA/build-id stamping baked into `codeq --version` and `manifest.json`. Operators can independently confirm a successful rollout with `scripts/verify-codeq-rollout.sh staging`.
