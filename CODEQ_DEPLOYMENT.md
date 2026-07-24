@@ -173,3 +173,263 @@ The following depend on live-project state and could not be checked from source:
   (`local.github_connection_ready`).
 - The actual codeq version any given running pod reports.
 - Whether any manual `gcloud builds triggers run …` has recently forced a rebuild.
+
+---
+
+## Layer 2 — running-pod refresh policy
+
+**Policy: passive convergence for routine updates; documented manual break-glass for security-critical; no in-Lab banner; no automated drain.** ([decision record #21](https://github.com/qBraid/opencode/issues/21))
+
+A running singleuser pod is pinned to the `codeq` binary baked into the image it spawned with — there is no in-place binary refresh. The only way a live session picks up an update is a full pod restart (stop → spawn → `pullPolicy: Always` re-pulls `lab-base:latest`, see Hop 3 above). Every refresh option reduces to *when/how that restart happens and who triggers it.*
+
+### Routine updates — convergence SLA
+
+No action is taken on rollout. Running sessions converge on their own via idle-cull (an idle singleuser server is stopped; the user's next login spawns a fresh pod on the current image) plus ordinary re-logins. New pods already get the update immediately at spawn — only already-running sessions lag.
+
+| Env | Idle-cull timeout | Cull check interval | Max-server-lifetime cap | Source |
+| --- | --- | --- | --- | --- |
+| staging | 30 min (`--timeout=1800`) | 5 min (`--cull-every=300`) | *not configured* | `qbraid-infrastructure` · `kubernetes/clusters/gcp/gke_staging_cluster/helm/jupyterhub/values-staging.yaml` · `hub.extraConfig.70_idle_culler` |
+| prod | 45 min (`--timeout=2700`) | 5 min (`--cull-every=300`) | *not configured* | `qbraid-infrastructure` · `kubernetes/clusters/gcp/gke_prod_cluster/helm/jupyterhub/values-prod.yaml` · `hub.extraConfig.70_idle_culler` |
+
+Both environments explicitly disable the z2jh chart's own `cull:` block (`cull.enabled: false`) so this `hub.extraConfig.70_idle_culler` service is the *only* culler in effect — the chart-level `cull_idle_timeout: 1200` under `singleuser.extraFiles` config is a notebook-kernel-level `MappingKernelManager` setting (kernel cull, not pod cull) and is not the pod-lifecycle knob. There is no `maxAge`/max-server-lifetime cap configured in either values file, so a continuously-active session (one that never goes idle long enough to be culled) has no absolute upper bound forcing a restart.
+
+**Convergence SLA:** idle sessions converge to the current image within roughly the idle-cull timeout above (≤30 min staging / ≤45 min prod, checked every 5 min) after their last activity. Actively-used sessions converge only when the user restarts their server or logs back in after going idle — there is no absolute time cap forcing convergence for a session that stays continuously active.
+
+### Security-critical updates — break-glass drain
+
+Passive convergence remains the default. For a genuine security-critical update (e.g. a CVE in `codeq`) an operator may force convergence:
+
+- **Who:** a qBraid infra/on-call operator with JupyterHub admin or cluster (`kubectl`) access.
+- **One-line step:** force-stop the stale singleuser pods — JupyterHub admin panel "stop server" for affected users, or `kubectl delete pod <singleuser-pod>` in the target namespace — so each user's next login spawns a fresh pod that pulls the patched `lab-base:latest` image.
+- **Safeguard:** this is a blunt instrument that interrupts active sessions and any in-progress work (agent runs, unsaved notebook state). Reserve it for the security tier; where practical, warn affected users first and target only pods confirmed stale (old image digest / old `codeq --version`) rather than draining indiscriminately.
+
+### Deliberately not implemented
+
+- **No in-Lab "restart to update" banner.** Not worth the Lab UI work for a passive baseline; users who care can restart themselves, and idle-cull converges the rest.
+- **No automated forced drain on every rollout.** Disproportionate to routine changes and destroys in-progress user work; passive convergence handles routine updates and the break-glass runbook above handles urgent ones.
+
+## System-owned config fields registry
+
+CodeQ user config lives at `~/.config/codeq/config.json` and persists forever per user via GCS home-sync. For **existing** users the only convergence surface is `update-codeq-token.sh`, which runs at pod start and on every codeq launch (via `codeq-wrapper.sh`). This registry is the **single source of truth** for the fields that script re-asserts; the Dstacks re-assert block mirrors this table.
+
+**Canonical script copy:** `qbraid-lab-base/scripts/update-codeq-token.sh` in `qbraid-Dstacks` is the canonical copy — it is the image that deploys to the staging/prod K8s Lab path. (`qbraid-overlay/scripts/update-codeq-token.sh` is a secondary, in-flux overlay-path copy that must be kept byte-in-sync with, or folded into, the canonical copy; it must never diverge in the set of fields it asserts.)
+
+### Fields Dstacks re-asserts (system-owned)
+
+Grouped as the two buckets in the script:
+
+**(1) Environment-injected** — pod-environment facts the binary can't self-default:
+
+| Field | Assertion | Notes |
+| --- | --- | --- |
+| `provider.qbraid.options.apiKey` | always set | qBraid access token (env var `QBRAID_ACCESS_TOKEN`, else `~/.qbraid/qbraidrc`). |
+| `provider.qbraid.options.baseURL` | always set | AI gateway `$ACCOUNT_URL/api/ai/v1` (env `QBRAID_ACCOUNT_URL`, else qbraidrc url map, else `https://account.qbraid.com`). |
+| `mcp.pod_mcp.command` | always set | `["/usr/bin/python3", "/opt/qbraid-mcp-server/server/main.py"]`. |
+| `mcp.pod_mcp.type` | only-if-absent (`//=`) | defaults `"local"`; a user value survives. |
+| `mcp.pod_mcp.enabled` | only-if-absent (`//=`) | defaults `true`; a user toggle survives. |
+
+**(2) Migrations / forced corrections** — fix-ups for explicit stale values the binary can't self-correct:
+
+| Field | Assertion | Notes |
+| --- | --- | --- |
+| `model` | migrate stale id → current; empty → default; valid user id preserved | Uses the retired-ids map below. Empty/absent `.model` → `qbraid/gemini-3.5-flash`. A valid user-chosen model is left untouched. |
+
+### Fields Dstacks must NOT touch (user-owned)
+
+Everything not listed above is user-owned and must never be written by the re-assert. In particular:
+
+- `permission` (the entire block — e.g. `permission.edit`, `permission.bash`)
+- any user-added `provider.*` entries other than the specific `provider.qbraid.options.apiKey`/`baseURL` fields above
+- any `mcp.*` entry other than `mcp.pod_mcp.command`/`type`/`enabled`
+- all other keys (theme, keybinds, layout, agents, etc.)
+
+The CodeQ config schema is almost entirely `.optional()` and the binary merges its own built-in defaults for absent fields, so a genuinely absent field already gets the binary's new default on a fresh pod — it needs no re-assert. Only an **explicit stale value** needs the high-authority correction above.
+
+### Retired ids / renamed fields
+
+Running list, seeded from the current `MODEL_MIGRATIONS` map. Every entry here must be mirrored in the canonical script's `MODEL_MIGRATIONS` (jq) and the paired `sed` fallback.
+
+| Kind | Retired / old | Replacement |
+| --- | --- | --- |
+| model id | `qbraid/gemini-3-flash` | `qbraid/gemini-3.5-flash` |
+| model id | `qbraid/gemini-3-pro` | `qbraid/gemini-3.1-pro` |
+| model id | `qbraid/claude-opus-4-6` | `qbraid/claude-opus-4-8` |
+| model id | `qbraid/claude-sonnet-4-5` | `qbraid/claude-sonnet-4-6` |
+| model id | `qbraid/grok-4.1-fast` | `qbraid/gemini-3.5-flash` |
+| default | empty / absent `model` | `qbraid/gemini-3.5-flash` |
+| endpoint | `account-v2.qbraid.com` (baseURL host) | `account.qbraid.com` (re-asserted via the always-set `baseURL`) |
+
+### Scoped contract
+
+A codeq change owes a **paired `qbraid-Dstacks` re-assert** update (to the canonical `update-codeq-token.sh`) **only** when it:
+
+1. **renames** a system-owned field,
+2. **retires** a value id (a dead model id or dead endpoint),
+3. **forces a changed default** onto users who may hold an old explicit value, or
+4. adds a **new system-injected field** the binary can't self-default (like `apiKey`/`baseURL`).
+
+Purely additive optional fields with a sane binary default owe **nothing** — do not add busywork re-asserts for them. Any change to this registry (the tables above) is the visible signal that a paired Dstacks PR is due; the codeq PR editing the registry must be paired with a `qbraid-Dstacks` PR updating the canonical `update-codeq-token.sh` before/with the rollout.
+
+### Release-checklist line
+
+> **[ ] System-owned config fields registry** — if this PR changed the *System-owned config fields registry* (added/renamed/retired a system-owned field, retired a model id/endpoint, or forced a changed default), a paired `qbraid-Dstacks` PR updating the canonical `qbraid-lab-base/scripts/update-codeq-token.sh` (both the `jq` and `sed` branches) is merged/queued before rollout, and the overlay copy is kept in sync.
+
+## Rollout smoke-test — is a codeq change live for all users on env X?
+
+The rollout smoke-test asserts exactly **one claim**: `lab-base:latest` carries
+the expected codeq SHA. `lab-base:latest` is the on-ramp every user pod draws
+from, so **image-correct ⟹ live for all users** — a correct image means every
+new or restarted pod runs the correct codeq binary plus re-asserted config.
+
+Truth lives in two places (both stamped by qBraid/opencode#24):
+
+| Side | Source | Meaning |
+|---|---|---|
+| **Expected** | `sha` key in `gs://<codeq-bucket>/latest/manifest.json` | what the codeq build published (hop 1) |
+| **Observed** | `codeq --version` on the `lab-base:latest` binary | what the image bake actually baked in (hop 2) |
+
+Bucket per env: staging `gs://qbraid-codeq-staging`, prod `gs://qbraid-codeq`.
+The version string is `0.0.0-<sha>+<build_id>`; the smoke-test compares the
+`<sha>` segment. `build_id` is for traceability only — not a gate.
+
+### Check B — operator one-liner (on-demand, no pod shell)
+
+Run the registry-read-only verifier for the target env:
+
+```bash
+./scripts/verify-codeq-rollout.sh staging   # or: prod
+```
+
+It pulls the **live** `lab-base:latest` from Artifact Registry, runs
+`codeq --version`, and SHA-compares to the bucket `manifest.json`. It uses
+**registry-read + bucket-read auth only — no `kubectl exec`, no pod access.**
+This is the prod go-live confirmation step and the universal spot-check.
+
+**Pass/fail criterion:**
+
+- **PASS** (exit 0) ⟺ `observed.sha == expected.sha` — the live `lab-base:latest`
+  is on the SHA the manifest advertises. At that point the change is "live for
+  all users on env X": every new/restarted pod runs the correct binary.
+- **FAIL** (exit 1) ⟺ SHA mismatch — the live image is **not** on the advertised
+  SHA. Investigate a stale/raced manifest `cp`, broken stamping, or a rebuild
+  that has not yet run. (Exit 2 = usage/precondition error, e.g. auth or a
+  missing `sha` key.)
+
+"Live for all users" means the **image source is correct**, not that every
+running pod has already recycled.
+
+### Already-running pods — passive convergence, not gated
+
+Already-running pods converge **by-construction on restart** (correct image ⟹
+correct binary + re-asserted config), per the Layer-2 passive-convergence
+refresh policy (decision #21). This convergence window is **deliberately not
+measured or gated** by the smoke-test — knowing which pods are still stale adds
+nothing to the rollout decision, since they self-correct on their next restart.
+
+### Check A — in-build fail-closed gate (automatic)
+
+Every `build-lab-base` (staging) / `build-lab-base-prod` (prod) run executes an
+`assert-codeq-sha` step after the build/tag steps but **before** the deferred
+`images = [...]:latest` push. Because the push is deferred until every step
+passes, a SHA mismatch aborts the build and **`:latest` is never poisoned** — it
+stays on the last-good image. This is the fail-closed guard on the staging
+auto-rebuild and runs on every prod rebuild; no operator action required.
+
+## Staging auto-rebuild (codeq push → build-lab-base)
+
+**Status: enabled.** Implements Phase 1 of the layer-1 rebuild-mechanism decision (qBraid/opencode#19), closing the HOP-2 gap: a fresh codeq binary landing in `gs://qbraid-codeq-staging` touches no `qbraid-lab-base/**` file in `qbraid-Dstacks`, so `build-lab-base` never fired on its own — `lab-base:latest` kept the old binary until someone ran the trigger by hand.
+
+### Mechanism
+
+`terraform/environments/staging/gcp/cloud-build-codeq.tf` — `opencode-staging-branch`'s build now ends with a `trigger-lab-base-rebuild` step (after `upload-gcs` and `upload-manifest` both succeed):
+
+```
+gcloud builds triggers run build-lab-base \
+  --project=<staging-project> \
+  --region=<staging-region> \
+  --branch=staging \
+  --impersonate-service-account=codeq-labbase-trigger@<staging-project>.iam.gserviceaccount.com
+```
+
+This is a direct, synchronous trigger-run call — **not** a Pub/Sub topic and **not** a `chain-rebuild-*` trigger. That pattern (the one implicated in the 2026-06-11 cascade post-mortem) is being retired, not extended.
+
+### IAM scoping
+
+Cloud Build does not support trigger-level (resource-scoped) IAM — `cloudbuild.googleapis.com` is not among the services covered by GCP's resource-attribute IAM Conditions, so the `cloudbuild.builds.create` permission that `triggers.run` requires can only be granted at the **project** level; there is no way to bind it to just the `build-lab-base` trigger's resource name.
+
+To minimize blast radius anyway:
+- A new single-purpose service account, `codeq-labbase-trigger@<staging-project>`, holds a **custom role** (`codeqLabBaseTriggerRunnerStaging`) granting **only** `cloudbuild.builds.create` — not the broader `roles/cloudbuild.builds.editor` bundle (which also allows editing/cancelling arbitrary builds and managing triggers).
+- The shared `cloud-build-staging` service account — the executor identity for every staging Cloud Build trigger (foundation, lab-vscode, lab-intel, wheels, jupyterhub, compliance, etc.) — is granted `roles/iam.serviceAccountTokenCreator` scoped to **only that one SA resource** (`google_service_account_iam_member`, not a project-wide grant), so it can impersonate `codeq-labbase-trigger` for exactly this one `gcloud` call. `cloud-build-staging` itself never gains standing `cloudbuild.builds.create` permission.
+- Net effect: if `codeq-labbase-trigger`'s credentials were ever compromised, the worst case is "can run any trigger in the staging project" — it cannot touch prod (separate project and SA) and holds no other permissions.
+
+**Documented limitation:** this grant is project-scoped, not trigger-scoped, because Cloud Build doesn't offer a finer grain today. If GCP later adds trigger-level IAM Conditions, the custom-role binding should be tightened to a condition targeting only `projects/<staging-project>/locations/<region>/triggers/build-lab-base`.
+
+### Anti-cascade guardrails satisfied
+
+- **Narrow target**: fires `build-lab-base` only — never `build-foundation`, never any `docker-stacks-*` trigger.
+- **Per-env + explicit branch**: `--branch=staging` targets only the staging `build-lab-base` trigger; the impersonated SA has run-permission on staging triggers only (separate project from prod's `build-lab-base-prod`).
+- **Idempotent**: `gcloud builds triggers run` is fire-and-forget; a rebuild simply re-pulls `latest/linux-x64/codeq`, so at-least-once firing (e.g. a retried step) is safe — no debounce needed.
+- **No Pub/Sub topic, no `chain-rebuild-*` trigger** introduced.
+
+### Observability and safety
+
+The first auto-rebuild fired by this step is guarded by the #25 fail-closed `assert-codeq-sha` gate in `build-lab-base` (a codeq/manifest SHA mismatch aborts the build before the deferred `:latest` image push, leaving the last-good image in place) and is observable via the #24 SHA/build-id stamping baked into `codeq --version` and `manifest.json`. Operators can independently confirm a successful rollout with `scripts/verify-codeq-rollout.sh staging`.
+
+## Prod go-live checklist (codeq push → build-lab-base-prod)
+
+**Status: WIRED BUT DISABLED.** Implements Phase 2 of the layer-1 rebuild-mechanism decision (qBraid/opencode#19). The prod auto-rebuild is the exact analog of the staging mechanism above, shipped in `terraform/environments/prod/gcp/cloud-build-codeq.tf` (qBraid/opencode#29) but kept **provably inert** until every gate below is green. Prod must not auto-promote a codeq binary into `lab-base-prod:latest` while the lab-base image scan is still advisory — that is the whole point of the gate.
+
+### Why it's off (two independent locks)
+
+1. **No active step.** The `trigger-lab-base-rebuild` step is appended to `opencode-prod-main`'s build but left **commented out** behind a `# GO-LIVE GATE:` header. No build step fires the trigger.
+2. **Withheld IAM.** The prod trigger-runner service account, its `cloudbuild.builds.create` custom role, and the impersonation grant are **not declared** — they exist only as commented-out reference blocks. The shared executor SA (`google_service_account.cloud_build`) holds no `cloudbuild.builds.create` and can impersonate no SA that does, so even an accidental uncomment fails closed.
+
+### Gates (all must pass before flip)
+
+1. **lab-base Trivy restored to `--exit-code=1`** — **[cross-repo: infra#331 / Dstacks#34/#35/#38]**. Both `build-foundation` and `build-lab-base[-prod]` are currently `--exit-code=0` (advisory, temporary per infra#284). **This ticket does NOT flip it** — it is tracked and owned in those repos. Until restored, a Trivy-clean-but-CVE-bearing image could auto-promote to prod `lab-base-prod:latest`; the gate blocks exactly that.
+2. **Rollout smoke-test exists** — **satisfied by qBraid/opencode#25**: the in-build fail-closed `assert-codeq-sha` gate in `build-lab-base[-prod]` (aborts before the deferred `:latest` push on a codeq/manifest SHA mismatch) plus the operator one-liner `scripts/verify-codeq-rollout.sh`.
+3. **Prod `qbraid-codeq` bucket object versioning confirmed enabled.** The fast break-glass rollback (restore the prior `latest/linux-x64/codeq` + `manifest.json` object generations) depends on it. Unlike `qbraid-codeq-staging` (declared in Terraform with `versioning { enabled = true }`), the prod `qbraid-codeq` bucket is **not TF-declared** in `qbraid-infrastructure` (referenced only by IAM), so its versioning **cannot be verified from source** and must be confirmed directly against GCP. This is a manual go-live gate.
+
+   Confirm (read-only):
+   ```
+   gcloud storage buckets describe gs://qbraid-codeq \
+     --project=<prod-project> --format="value(versioning.enabled)"
+   # expect: True
+   ```
+   or, equivalently:
+   ```
+   gsutil versioning get gs://qbraid-codeq
+   # expect: gs://qbraid-codeq: Enabled
+   ```
+   Enable if it reports disabled/empty:
+   ```
+   gcloud storage buckets update gs://qbraid-codeq --versioning
+   # or: gsutil versioning set on gs://qbraid-codeq
+   ```
+
+### To actually flip prod on (only after all three gates are green)
+
+In `terraform/environments/prod/gcp/cloud-build-codeq.tf`:
+
+1. **Uncomment** the `step { id = "trigger-lab-base-rebuild" ... }` block in `opencode-prod-main`'s build. It fires, after `upload-gcs` + `upload-manifest` succeed:
+   ```
+   gcloud builds triggers run build-lab-base-prod \
+     --project=<prod-project> \
+     --region=<prod-region> \
+     --branch=main \
+     --impersonate-service-account=codeq-labbase-trigger-prod@<prod-project>.iam.gserviceaccount.com
+   ```
+2. **Add the withheld IAM** (the prod analog of staging's block, provided as commented reference in the same file):
+   - `google_service_account.codeq_lab_base_trigger_prod` (`account_id = "codeq-labbase-trigger-prod"`) — single-purpose SA, no other roles;
+   - `google_project_iam_custom_role.codeq_lab_base_trigger_runner_prod` (`role_id = "codeqLabBaseTriggerRunnerProd"`, `permissions = ["cloudbuild.builds.create"]`) — only the one permission `triggers.run` needs, not the broader `roles/cloudbuild.builds.editor`;
+   - `google_project_iam_member` binding that custom role to the SA;
+   - `google_service_account_iam_member` granting `roles/iam.serviceAccountTokenCreator` on that SA to `google_service_account.cloud_build`, resource-scoped to the one SA (so the executor gets no standing `builds.create`).
+
+### Anti-cascade guardrails (preserved from staging)
+
+- **Narrow target**: fires `build-lab-base-prod` only — never `build-foundation`, never any `docker-stacks-*` trigger.
+- **Per-env + explicit branch**: `--branch=main` targets only the prod `build-lab-base-prod` trigger; the prod trigger-runner SA (once created) holds run-permission on prod triggers only — no path to staging's `build-lab-base`.
+- **Idempotent**: `gcloud builds triggers run` is fire-and-forget; a rebuild re-pulls `latest/linux-x64/codeq`, so at-least-once firing is safe.
+- **No Pub/Sub topic, no `chain-rebuild-*` trigger** introduced.
+
+**Documented limitation** (same as staging): Cloud Build has no trigger-level IAM, so `cloudbuild.builds.create` can only be granted project-wide; blast radius is minimized by giving it to a single-purpose SA and scoping impersonation to that one SA resource.
