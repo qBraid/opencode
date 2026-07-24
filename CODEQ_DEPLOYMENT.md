@@ -173,3 +173,37 @@ The following depend on live-project state and could not be checked from source:
   (`local.github_connection_ready`).
 - The actual codeq version any given running pod reports.
 - Whether any manual `gcloud builds triggers run …` has recently forced a rebuild.
+
+---
+
+## Layer 2 — running-pod refresh policy
+
+**Policy: passive convergence for routine updates; documented manual break-glass for security-critical; no in-Lab banner; no automated drain.** ([decision record #21](https://github.com/qBraid/opencode/issues/21))
+
+A running singleuser pod is pinned to the `codeq` binary baked into the image it spawned with — there is no in-place binary refresh. The only way a live session picks up an update is a full pod restart (stop → spawn → `pullPolicy: Always` re-pulls `lab-base:latest`, see Hop 3 above). Every refresh option reduces to *when/how that restart happens and who triggers it.*
+
+### Routine updates — convergence SLA
+
+No action is taken on rollout. Running sessions converge on their own via idle-cull (an idle singleuser server is stopped; the user's next login spawns a fresh pod on the current image) plus ordinary re-logins. New pods already get the update immediately at spawn — only already-running sessions lag.
+
+| Env | Idle-cull timeout | Cull check interval | Max-server-lifetime cap | Source |
+| --- | --- | --- | --- | --- |
+| staging | 30 min (`--timeout=1800`) | 5 min (`--cull-every=300`) | *not configured* | `qbraid-infrastructure` · `kubernetes/clusters/gcp/gke_staging_cluster/helm/jupyterhub/values-staging.yaml` · `hub.extraConfig.70_idle_culler` |
+| prod | 45 min (`--timeout=2700`) | 5 min (`--cull-every=300`) | *not configured* | `qbraid-infrastructure` · `kubernetes/clusters/gcp/gke_prod_cluster/helm/jupyterhub/values-prod.yaml` · `hub.extraConfig.70_idle_culler` |
+
+Both environments explicitly disable the z2jh chart's own `cull:` block (`cull.enabled: false`) so this `hub.extraConfig.70_idle_culler` service is the *only* culler in effect — the chart-level `cull_idle_timeout: 1200` under `singleuser.extraFiles` config is a notebook-kernel-level `MappingKernelManager` setting (kernel cull, not pod cull) and is not the pod-lifecycle knob. There is no `maxAge`/max-server-lifetime cap configured in either values file, so a continuously-active session (one that never goes idle long enough to be culled) has no absolute upper bound forcing a restart.
+
+**Convergence SLA:** idle sessions converge to the current image within roughly the idle-cull timeout above (≤30 min staging / ≤45 min prod, checked every 5 min) after their last activity. Actively-used sessions converge only when the user restarts their server or logs back in after going idle — there is no absolute time cap forcing convergence for a session that stays continuously active.
+
+### Security-critical updates — break-glass drain
+
+Passive convergence remains the default. For a genuine security-critical update (e.g. a CVE in `codeq`) an operator may force convergence:
+
+- **Who:** a qBraid infra/on-call operator with JupyterHub admin or cluster (`kubectl`) access.
+- **One-line step:** force-stop the stale singleuser pods — JupyterHub admin panel "stop server" for affected users, or `kubectl delete pod <singleuser-pod>` in the target namespace — so each user's next login spawns a fresh pod that pulls the patched `lab-base:latest` image.
+- **Safeguard:** this is a blunt instrument that interrupts active sessions and any in-progress work (agent runs, unsaved notebook state). Reserve it for the security tier; where practical, warn affected users first and target only pods confirmed stale (old image digest / old `codeq --version`) rather than draining indiscriminately.
+
+### Deliberately not implemented
+
+- **No in-Lab "restart to update" banner.** Not worth the Lab UI work for a passive baseline; users who care can restart themselves, and idle-cull converges the rest.
+- **No automated forced drain on every rollout.** Disproportionate to routine changes and destroys in-progress user work; passive convergence handles routine updates and the break-glass runbook above handles urgent ones.
