@@ -207,3 +207,69 @@ Passive convergence remains the default. For a genuine security-critical update 
 
 - **No in-Lab "restart to update" banner.** Not worth the Lab UI work for a passive baseline; users who care can restart themselves, and idle-cull converges the rest.
 - **No automated forced drain on every rollout.** Disproportionate to routine changes and destroys in-progress user work; passive convergence handles routine updates and the break-glass runbook above handles urgent ones.
+
+## System-owned config fields registry
+
+CodeQ user config lives at `~/.config/codeq/config.json` and persists forever per user via GCS home-sync. For **existing** users the only convergence surface is `update-codeq-token.sh`, which runs at pod start and on every codeq launch (via `codeq-wrapper.sh`). This registry is the **single source of truth** for the fields that script re-asserts; the Dstacks re-assert block mirrors this table.
+
+**Canonical script copy:** `qbraid-lab-base/scripts/update-codeq-token.sh` in `qbraid-Dstacks` is the canonical copy — it is the image that deploys to the staging/prod K8s Lab path. (`qbraid-overlay/scripts/update-codeq-token.sh` is a secondary, in-flux overlay-path copy that must be kept byte-in-sync with, or folded into, the canonical copy; it must never diverge in the set of fields it asserts.)
+
+### Fields Dstacks re-asserts (system-owned)
+
+Grouped as the two buckets in the script:
+
+**(1) Environment-injected** — pod-environment facts the binary can't self-default:
+
+| Field | Assertion | Notes |
+| --- | --- | --- |
+| `provider.qbraid.options.apiKey` | always set | qBraid access token (env var `QBRAID_ACCESS_TOKEN`, else `~/.qbraid/qbraidrc`). |
+| `provider.qbraid.options.baseURL` | always set | AI gateway `$ACCOUNT_URL/api/ai/v1` (env `QBRAID_ACCOUNT_URL`, else qbraidrc url map, else `https://account.qbraid.com`). |
+| `mcp.pod_mcp.command` | always set | `["/usr/bin/python3", "/opt/qbraid-mcp-server/server/main.py"]`. |
+| `mcp.pod_mcp.type` | only-if-absent (`//=`) | defaults `"local"`; a user value survives. |
+| `mcp.pod_mcp.enabled` | only-if-absent (`//=`) | defaults `true`; a user toggle survives. |
+
+**(2) Migrations / forced corrections** — fix-ups for explicit stale values the binary can't self-correct:
+
+| Field | Assertion | Notes |
+| --- | --- | --- |
+| `model` | migrate stale id → current; empty → default; valid user id preserved | Uses the retired-ids map below. Empty/absent `.model` → `qbraid/gemini-3.5-flash`. A valid user-chosen model is left untouched. |
+
+### Fields Dstacks must NOT touch (user-owned)
+
+Everything not listed above is user-owned and must never be written by the re-assert. In particular:
+
+- `permission` (the entire block — e.g. `permission.edit`, `permission.bash`)
+- any user-added `provider.*` entries other than the specific `provider.qbraid.options.apiKey`/`baseURL` fields above
+- any `mcp.*` entry other than `mcp.pod_mcp.command`/`type`/`enabled`
+- all other keys (theme, keybinds, layout, agents, etc.)
+
+The CodeQ config schema is almost entirely `.optional()` and the binary merges its own built-in defaults for absent fields, so a genuinely absent field already gets the binary's new default on a fresh pod — it needs no re-assert. Only an **explicit stale value** needs the high-authority correction above.
+
+### Retired ids / renamed fields
+
+Running list, seeded from the current `MODEL_MIGRATIONS` map. Every entry here must be mirrored in the canonical script's `MODEL_MIGRATIONS` (jq) and the paired `sed` fallback.
+
+| Kind | Retired / old | Replacement |
+| --- | --- | --- |
+| model id | `qbraid/gemini-3-flash` | `qbraid/gemini-3.5-flash` |
+| model id | `qbraid/gemini-3-pro` | `qbraid/gemini-3.1-pro` |
+| model id | `qbraid/claude-opus-4-6` | `qbraid/claude-opus-4-8` |
+| model id | `qbraid/claude-sonnet-4-5` | `qbraid/claude-sonnet-4-6` |
+| model id | `qbraid/grok-4.1-fast` | `qbraid/gemini-3.5-flash` |
+| default | empty / absent `model` | `qbraid/gemini-3.5-flash` |
+| endpoint | `account-v2.qbraid.com` (baseURL host) | `account.qbraid.com` (re-asserted via the always-set `baseURL`) |
+
+### Scoped contract
+
+A codeq change owes a **paired `qbraid-Dstacks` re-assert** update (to the canonical `update-codeq-token.sh`) **only** when it:
+
+1. **renames** a system-owned field,
+2. **retires** a value id (a dead model id or dead endpoint),
+3. **forces a changed default** onto users who may hold an old explicit value, or
+4. adds a **new system-injected field** the binary can't self-default (like `apiKey`/`baseURL`).
+
+Purely additive optional fields with a sane binary default owe **nothing** — do not add busywork re-asserts for them. Any change to this registry (the tables above) is the visible signal that a paired Dstacks PR is due; the codeq PR editing the registry must be paired with a `qbraid-Dstacks` PR updating the canonical `update-codeq-token.sh` before/with the rollout.
+
+### Release-checklist line
+
+> **[ ] System-owned config fields registry** — if this PR changed the *System-owned config fields registry* (added/renamed/retired a system-owned field, retired a model id/endpoint, or forced a changed default), a paired `qbraid-Dstacks` PR updating the canonical `qbraid-lab-base/scripts/update-codeq-token.sh` (both the `jq` and `sed` branches) is merged/queued before rollout, and the overlay copy is kept in sync.
