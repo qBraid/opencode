@@ -273,3 +273,64 @@ Purely additive optional fields with a sane binary default owe **nothing** — d
 ### Release-checklist line
 
 > **[ ] System-owned config fields registry** — if this PR changed the *System-owned config fields registry* (added/renamed/retired a system-owned field, retired a model id/endpoint, or forced a changed default), a paired `qbraid-Dstacks` PR updating the canonical `qbraid-lab-base/scripts/update-codeq-token.sh` (both the `jq` and `sed` branches) is merged/queued before rollout, and the overlay copy is kept in sync.
+
+## Rollout smoke-test — is a codeq change live for all users on env X?
+
+The rollout smoke-test asserts exactly **one claim**: `lab-base:latest` carries
+the expected codeq SHA. `lab-base:latest` is the on-ramp every user pod draws
+from, so **image-correct ⟹ live for all users** — a correct image means every
+new or restarted pod runs the correct codeq binary plus re-asserted config.
+
+Truth lives in two places (both stamped by qBraid/opencode#24):
+
+| Side | Source | Meaning |
+|---|---|---|
+| **Expected** | `sha` key in `gs://<codeq-bucket>/latest/manifest.json` | what the codeq build published (hop 1) |
+| **Observed** | `codeq --version` on the `lab-base:latest` binary | what the image bake actually baked in (hop 2) |
+
+Bucket per env: staging `gs://qbraid-codeq-staging`, prod `gs://qbraid-codeq`.
+The version string is `0.0.0-<sha>+<build_id>`; the smoke-test compares the
+`<sha>` segment. `build_id` is for traceability only — not a gate.
+
+### Check B — operator one-liner (on-demand, no pod shell)
+
+Run the registry-read-only verifier for the target env:
+
+```bash
+./scripts/verify-codeq-rollout.sh staging   # or: prod
+```
+
+It pulls the **live** `lab-base:latest` from Artifact Registry, runs
+`codeq --version`, and SHA-compares to the bucket `manifest.json`. It uses
+**registry-read + bucket-read auth only — no `kubectl exec`, no pod access.**
+This is the prod go-live confirmation step and the universal spot-check.
+
+**Pass/fail criterion:**
+
+- **PASS** (exit 0) ⟺ `observed.sha == expected.sha` — the live `lab-base:latest`
+  is on the SHA the manifest advertises. At that point the change is "live for
+  all users on env X": every new/restarted pod runs the correct binary.
+- **FAIL** (exit 1) ⟺ SHA mismatch — the live image is **not** on the advertised
+  SHA. Investigate a stale/raced manifest `cp`, broken stamping, or a rebuild
+  that has not yet run. (Exit 2 = usage/precondition error, e.g. auth or a
+  missing `sha` key.)
+
+"Live for all users" means the **image source is correct**, not that every
+running pod has already recycled.
+
+### Already-running pods — passive convergence, not gated
+
+Already-running pods converge **by-construction on restart** (correct image ⟹
+correct binary + re-asserted config), per the Layer-2 passive-convergence
+refresh policy (decision #21). This convergence window is **deliberately not
+measured or gated** by the smoke-test — knowing which pods are still stale adds
+nothing to the rollout decision, since they self-correct on their next restart.
+
+### Check A — in-build fail-closed gate (automatic)
+
+Every `build-lab-base` (staging) / `build-lab-base-prod` (prod) run executes an
+`assert-codeq-sha` step after the build/tag steps but **before** the deferred
+`images = [...]:latest` push. Because the push is deferred until every step
+passes, a SHA mismatch aborts the build and **`:latest` is never poisoned** — it
+stays on the last-good image. This is the fail-closed guard on the staging
+auto-rebuild and runs on every prod rebuild; no operator action required.
