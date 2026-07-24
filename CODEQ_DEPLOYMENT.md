@@ -374,3 +374,62 @@ To minimize blast radius anyway:
 ### Observability and safety
 
 The first auto-rebuild fired by this step is guarded by the #25 fail-closed `assert-codeq-sha` gate in `build-lab-base` (a codeq/manifest SHA mismatch aborts the build before the deferred `:latest` image push, leaving the last-good image in place) and is observable via the #24 SHA/build-id stamping baked into `codeq --version` and `manifest.json`. Operators can independently confirm a successful rollout with `scripts/verify-codeq-rollout.sh staging`.
+
+## Prod go-live checklist (codeq push → build-lab-base-prod)
+
+**Status: WIRED BUT DISABLED.** Implements Phase 2 of the layer-1 rebuild-mechanism decision (qBraid/opencode#19). The prod auto-rebuild is the exact analog of the staging mechanism above, shipped in `terraform/environments/prod/gcp/cloud-build-codeq.tf` (qBraid/opencode#29) but kept **provably inert** until every gate below is green. Prod must not auto-promote a codeq binary into `lab-base-prod:latest` while the lab-base image scan is still advisory — that is the whole point of the gate.
+
+### Why it's off (two independent locks)
+
+1. **No active step.** The `trigger-lab-base-rebuild` step is appended to `opencode-prod-main`'s build but left **commented out** behind a `# GO-LIVE GATE:` header. No build step fires the trigger.
+2. **Withheld IAM.** The prod trigger-runner service account, its `cloudbuild.builds.create` custom role, and the impersonation grant are **not declared** — they exist only as commented-out reference blocks. The shared executor SA (`google_service_account.cloud_build`) holds no `cloudbuild.builds.create` and can impersonate no SA that does, so even an accidental uncomment fails closed.
+
+### Gates (all must pass before flip)
+
+1. **lab-base Trivy restored to `--exit-code=1`** — **[cross-repo: infra#331 / Dstacks#34/#35/#38]**. Both `build-foundation` and `build-lab-base[-prod]` are currently `--exit-code=0` (advisory, temporary per infra#284). **This ticket does NOT flip it** — it is tracked and owned in those repos. Until restored, a Trivy-clean-but-CVE-bearing image could auto-promote to prod `lab-base-prod:latest`; the gate blocks exactly that.
+2. **Rollout smoke-test exists** — **satisfied by qBraid/opencode#25**: the in-build fail-closed `assert-codeq-sha` gate in `build-lab-base[-prod]` (aborts before the deferred `:latest` push on a codeq/manifest SHA mismatch) plus the operator one-liner `scripts/verify-codeq-rollout.sh`.
+3. **Prod `qbraid-codeq` bucket object versioning confirmed enabled.** The fast break-glass rollback (restore the prior `latest/linux-x64/codeq` + `manifest.json` object generations) depends on it. Unlike `qbraid-codeq-staging` (declared in Terraform with `versioning { enabled = true }`), the prod `qbraid-codeq` bucket is **not TF-declared** in `qbraid-infrastructure` (referenced only by IAM), so its versioning **cannot be verified from source** and must be confirmed directly against GCP. This is a manual go-live gate.
+
+   Confirm (read-only):
+   ```
+   gcloud storage buckets describe gs://qbraid-codeq \
+     --project=<prod-project> --format="value(versioning.enabled)"
+   # expect: True
+   ```
+   or, equivalently:
+   ```
+   gsutil versioning get gs://qbraid-codeq
+   # expect: gs://qbraid-codeq: Enabled
+   ```
+   Enable if it reports disabled/empty:
+   ```
+   gcloud storage buckets update gs://qbraid-codeq --versioning
+   # or: gsutil versioning set on gs://qbraid-codeq
+   ```
+
+### To actually flip prod on (only after all three gates are green)
+
+In `terraform/environments/prod/gcp/cloud-build-codeq.tf`:
+
+1. **Uncomment** the `step { id = "trigger-lab-base-rebuild" ... }` block in `opencode-prod-main`'s build. It fires, after `upload-gcs` + `upload-manifest` succeed:
+   ```
+   gcloud builds triggers run build-lab-base-prod \
+     --project=<prod-project> \
+     --region=<prod-region> \
+     --branch=main \
+     --impersonate-service-account=codeq-labbase-trigger-prod@<prod-project>.iam.gserviceaccount.com
+   ```
+2. **Add the withheld IAM** (the prod analog of staging's block, provided as commented reference in the same file):
+   - `google_service_account.codeq_lab_base_trigger_prod` (`account_id = "codeq-labbase-trigger-prod"`) — single-purpose SA, no other roles;
+   - `google_project_iam_custom_role.codeq_lab_base_trigger_runner_prod` (`role_id = "codeqLabBaseTriggerRunnerProd"`, `permissions = ["cloudbuild.builds.create"]`) — only the one permission `triggers.run` needs, not the broader `roles/cloudbuild.builds.editor`;
+   - `google_project_iam_member` binding that custom role to the SA;
+   - `google_service_account_iam_member` granting `roles/iam.serviceAccountTokenCreator` on that SA to `google_service_account.cloud_build`, resource-scoped to the one SA (so the executor gets no standing `builds.create`).
+
+### Anti-cascade guardrails (preserved from staging)
+
+- **Narrow target**: fires `build-lab-base-prod` only — never `build-foundation`, never any `docker-stacks-*` trigger.
+- **Per-env + explicit branch**: `--branch=main` targets only the prod `build-lab-base-prod` trigger; the prod trigger-runner SA (once created) holds run-permission on prod triggers only — no path to staging's `build-lab-base`.
+- **Idempotent**: `gcloud builds triggers run` is fire-and-forget; a rebuild re-pulls `latest/linux-x64/codeq`, so at-least-once firing is safe.
+- **No Pub/Sub topic, no `chain-rebuild-*` trigger** introduced.
+
+**Documented limitation** (same as staging): Cloud Build has no trigger-level IAM, so `cloudbuild.builds.create` can only be granted project-wide; blast radius is minimized by giving it to a single-purpose SA and scoping impersonation to that one SA resource.
