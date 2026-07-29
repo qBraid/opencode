@@ -4,13 +4,13 @@
     "name": "qBraid",
     "env": ["QBRAID_API_KEY"],
     "npm": "@ai-sdk/qbraid",
-    "api": "https://account-v2.qbraid.com/api/ai/v1",
+    "api": "https://account.qbraid.com/api/ai/v1",
     "models": {
-      "claude-opus-4-6": {
-        "id": "claude-opus-4-6",
-        "name": "Claude 4.6 Opus",
+      "claude-opus-4-8": {
+        "id": "claude-opus-4-8",
+        "name": "Claude Opus 4.8",
         "family": "claude-opus",
-        "release_date": "2026-02-06",
+        "release_date": "2026-01-01",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -26,16 +26,16 @@
           "cache_write": 6.25
         },
         "limit": {
-          "context": 200000,
-          "output": 64000
+          "context": 1000000,
+          "output": 128000
         },
         "options": {}
       },
-      "claude-sonnet-4-5": {
-        "id": "claude-sonnet-4-5",
-        "name": "Claude 4.5 Sonnet",
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude 4.6 Sonnet",
         "family": "claude-sonnet",
-        "release_date": "2025-09-29",
+        "release_date": "2026-01-01",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -51,7 +51,7 @@
           "cache_write": 3.75
         },
         "limit": {
-          "context": 200000,
+          "context": 1000000,
           "output": 64000
         },
         "options": {}
@@ -81,11 +81,11 @@
         },
         "options": {}
       },
-      "gemini-3-pro": {
-        "id": "gemini-3-pro",
-        "name": "Gemini 3 Pro",
+      "gemini-3.1-pro": {
+        "id": "gemini-3.1-pro",
+        "name": "Gemini 3.1 Pro",
         "family": "gemini-pro",
-        "release_date": "2025-11-18",
+        "release_date": "2026-01-01",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -110,11 +110,11 @@
         },
         "options": {}
       },
-      "gemini-3-flash": {
-        "id": "gemini-3-flash",
-        "name": "Gemini 3 Flash",
+      "gemini-3.5-flash": {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
         "family": "gemini-flash",
-        "release_date": "2025-12-17",
+        "release_date": "2026-05-19",
         "attachment": true,
         "reasoning": true,
         "temperature": true,
@@ -135,31 +135,7 @@
         },
         "limit": {
           "context": 1048576,
-          "output": 65536
-        },
-        "options": {}
-      },
-      "grok-4.1-fast": {
-        "id": "grok-4.1-fast",
-        "name": "Grok 4.1 Fast",
-        "family": "grok",
-        "release_date": "2025-11-19",
-        "attachment": true,
-        "reasoning": false,
-        "temperature": true,
-        "tool_call": true,
-        "modalities": {
-          "input": ["text", "image"],
-          "output": ["text"]
-        },
-        "cost": {
-          "input": 0.2,
-          "output": 0.5,
-          "cache_read": 0.05
-        },
-        "limit": {
-          "context": 2000000,
-          "output": 30000
+          "output": 65535
         },
         "options": {}
       }
