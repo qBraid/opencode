@@ -36,6 +36,8 @@ import { ArgsProvider, useArgs, type Args } from "./context/args"
 import open from "open"
 import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
+import { DialogTelemetryConsent, KV_TELEMETRY_CONSENT_SHOWN, KV_TELEMETRY_ENABLED } from "@tui/component/dialog-telemetry-consent"
+import { Telemetry } from "@/telemetry"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -271,6 +273,32 @@ function App() {
       route.navigate({ type: "session", sessionID: match })
     }
   })
+
+  // --- First-run telemetry consent dialog ---
+  // Fires once when sync is complete and user hasn't seen the consent dialog yet.
+  // Must fire *before* the provider connect dialog so consent is captured first.
+  let consentShown = false
+  createEffect(
+    on(
+      () => sync.status === "complete" && kv.get(KV_TELEMETRY_CONSENT_SHOWN) === undefined,
+      (needsConsent, prev) => {
+        if (!needsConsent || prev || consentShown) return
+        consentShown = true
+
+        // Load any existing consent value into the telemetry module
+        const existing = kv.get(KV_TELEMETRY_ENABLED)
+        if (existing !== undefined) {
+          Telemetry.loadConsent(existing === true)
+          kv.set(KV_TELEMETRY_CONSENT_SHOWN, true)
+          return
+        }
+
+        // Default to "paid" tier (gives genuine opt-out) until we can
+        // determine the actual tier from the auth/consent service.
+        DialogTelemetryConsent.show(dialog, "paid")
+      },
+    ),
+  )
 
   createEffect(
     on(

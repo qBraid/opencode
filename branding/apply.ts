@@ -127,8 +127,9 @@ function buildReplacements(config: Branding): Replacement[] {
   // - @opencode-ai package names
   // - Directory paths like /opencode/ (but allow /bin/opencode at end of path)
   // - File extensions like opencode.json
+  // - Third-party packages like @gitlab/opencode-gitlab-auth
   replacements.push({
-    search: /(?<!@)(?<!\/opencode)opencode(?!-ai|\/|\.(json|ts|tsx|js))/g,
+    search: /(?<!@)(?<!\/opencode)opencode(?!-ai|\/|\.(json|ts|tsx|js)|-gitlab-auth)/g,
     replace: r.productName,
     description: `opencode -> ${r.productName}`,
   })
@@ -220,33 +221,61 @@ interface FileTransform {
 }
 
 const FILE_TRANSFORMS: FileTransform[] = [
-  // CLI UI logo with purple Q
+  // CLI logo.ts - update the logo export
+  {
+    pattern: "packages/opencode/src/cli/logo.ts",
+    transform: (content, config) => {
+      // Replace the logo export with qbraid logo
+      const leftStr = config.logo.tui.left.map((l) => `"${l}"`).join(", ")
+      const rightStr = config.logo.tui.right.map((l) => `"${l}"`).join(", ")
+      
+      return `export const logo = {
+  left: [${leftStr}],
+  right: [${rightStr}],
+}
+
+export const marks = "_^~"
+`
+    },
+  },
+
+  // CLI UI logo() function - update to render Q in purple
+  // IMPORTANT: LOGO must be defined INSIDE the logo() function, not at module scope.
+  // The UI namespace compiles to an IIFE in the bundled binary, and module-scope
+  // const declarations are not accessible inside the IIFE.
   {
     pattern: "packages/opencode/src/cli/ui.ts",
     transform: (content, config) => {
       const logoStr = config.logo.cli.map((row) => `    [\`${row[0]}\`, \`${row[1]}\`],`).join("\n")
 
-      let result = content.replace(/const LOGO = \[\n[\s\S]*?\n  \]/, `const LOGO = [\n${logoStr}\n  ]`)
-
-      // Replace the logo() function to render the Q in purple
-      // Purple ANSI: \x1b[35m (standard) or \x1b[38;2;147;112;219m (RGB for medium purple)
-      result = result.replace(
-        /export function logo\(pad\?: string\) \{[\s\S]*?\n  \}/,
+      // Replace the logo() function with LOGO defined as a local constant inside it
+      const result = content.replace(
+        /export function logo\(pad\?: string\) \{[\s\S]*?return result\.join\(""\)\.trimEnd\(\)\n  \}/,
         `export function logo(pad?: string) {
-    const PURPLE = "\\x1b[38;2;147;112;219m"  // Medium purple RGB
-    const result = []
+    const LOGO = [
+${logoStr}
+    ]
+    const result: string[] = []
+    const reset = "\\x1b[0m"
+    const left = {
+      fg: Bun.color("gray", "ansi") ?? "",
+      shadow: "\\x1b[38;5;235m",
+      bg: "\\x1b[48;5;235m",
+    }
+    const PURPLE = "\\x1b[38;2;147;112;219m"  // Medium purple RGB for Q
+    
     for (const row of LOGO) {
       if (pad) result.push(pad)
-      result.push(Bun.color("gray", "ansi"))
+      result.push(left.fg)
       result.push(row[0])
-      result.push("\\x1b[0m")
-      result.push(PURPLE)  // Purple tint for the Q
+      result.push(reset)
+      result.push(PURPLE)  // Purple for the Q
       result.push(row[1])
-      result.push("\\x1b[0m")
+      result.push(reset)
       result.push(EOL)
     }
     return result.join("").trimEnd()
-  }`,
+  }`
       )
 
       return result
@@ -313,14 +342,14 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     },
   },
 
-  // Model provider configuration (remove Zen, add qBraid)
-  // This replaces the entire models.ts to use embedded models
+  // Model provider configuration
+  // When exclusive=true: replace get() to return only embedded models (original behavior)
+  // When default=true, exclusive=false: prepend branded models to the models.dev response
   {
     pattern: "packages/opencode/src/provider/models.ts",
     transform: async (content, config) => {
-      if (!config.models?.exclusive || !config.models?.source) return content
+      if (!config.models?.source) return content
 
-      // Read the models JSON
       const modelsPath = path.join(BRAND_DIR, config.models.source.replace("./", ""))
       const modelsFile = Bun.file(modelsPath)
       if (!(await modelsFile.exists())) {
@@ -329,18 +358,68 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
       }
 
       const modelsJson = await modelsFile.json()
-      // Remove schema and comment keys
       delete modelsJson.$schema
       delete modelsJson._comment
 
-      // Replace the get() function with one that returns embedded models directly
-      return content.replace(
-        /export async function get\(\) \{[\s\S]*?\n  \}/,
-        `export async function get() {
-    // Branding: embedded models (no external fetch)
+      if (config.models.exclusive) {
+        // Exclusive mode: only branded models, no models.dev fetch
+        const result = content.replace(
+          /export async function get\(\) \{[\s\S]*?\n  \}/,
+          `export async function get() {
+    // Branding: embedded models (exclusive mode, no external fetch)
     return ${JSON.stringify(modelsJson)} as Record<string, Provider>
   }`,
+        )
+        if (result === content) {
+          throw new Error("models.ts branding transform failed: get() regex did not match (exclusive mode)")
+        }
+        return result
+      }
+
+      // Default mode: prepend branded models, then merge models.dev data
+      // This ensures qBraid models appear first and are the defaults,
+      // while all upstream providers (Anthropic, OpenAI, Copilot, Codex, etc.)
+      // remain available.
+      //
+      // The replacement body references variables from the original models.ts scope:
+      //   - filepath (const, path to cache file)
+      //   - data (Bun macro import for bundled snapshot)
+      //   - refresh() (background fetch to update cache)
+      const brandedModelsStr = JSON.stringify(modelsJson)
+      const result = content.replace(
+        /export async function get\(\) \{[\s\S]*?\n  \}/,
+        `export async function get() {
+    // Branding: qBraid models prepended as defaults
+    const branded = ${brandedModelsStr} as Record<string, Provider>
+
+    // Kick off background cache refresh
+    refresh()
+
+    // Try cached models first, then macro bundle, then live fetch
+    let upstream: Record<string, Provider> = {}
+    try {
+      const file = Bun.file(filepath)
+      const cached = await file.json().catch(() => undefined)
+      if (cached) {
+        upstream = cached as Record<string, Provider>
+      } else if (typeof data === "function") {
+        upstream = JSON.parse(await data()) as Record<string, Provider>
+      } else {
+        const json = await fetch("https://models.dev/api.json").then((x) => x.text())
+        upstream = JSON.parse(json) as Record<string, Provider>
+      }
+    } catch {
+      // All upstream sources failed — branded models only
+    }
+
+    // Merge: branded providers win on conflict
+    return { ...upstream, ...branded }
+  }`,
       )
+      if (result === content) {
+        throw new Error("models.ts branding transform failed: get() regex did not match. Has the upstream function signature changed?")
+      }
+      return result
     },
   },
 
@@ -357,38 +436,43 @@ const PURPLE = RGBA.fromHex("#9370DB")`,
     },
   },
 
-  // Remove builtin plugins (they don't exist for qBraid branding)
+  // Remove builtin plugins only in exclusive mode.
+  // In default mode (exclusive=false), keep plugins so Anthropic auth,
+  // Codex OAuth, Copilot device code, etc. continue to work.
   {
     pattern: "packages/opencode/src/plugin/index.ts",
     transform: (content, config) => {
       if (!config.models?.exclusive) return content
 
-      // Clear the BUILTIN array - these npm packages don't exist for branded versions
-      // Match the array with its contents across potential newlines
-      return content.replace(
+      const result = content.replace(
         /const BUILTIN = \["[^"]*"(?:,\s*"[^"]*")*\]/,
         "const BUILTIN: string[] = [] // Cleared by branding - no external plugins",
       )
+      if (result === content) {
+        throw new Error("plugin/index.ts branding transform failed: BUILTIN regex did not match")
+      }
+      return result
     },
   },
 
-  // Remove custom loaders for providers that don't exist in exclusive models
+  // Remove custom loaders only in exclusive mode.
+  // In default mode, keep all loaders — they're needed for native provider support
+  // (Anthropic, OpenAI, Bedrock, Copilot, etc.).
   {
     pattern: "packages/opencode/src/provider/provider.ts",
     transform: (content, config) => {
       if (!config.models?.exclusive) return content
 
-      // Comment out all custom loaders when in exclusive mode
-      // This prevents "Provider does not exist in model list" errors
-      // Match the CUSTOM_LOADERS object definition and replace with empty object
-      // The object starts at "const CUSTOM_LOADERS: Record<string, CustomLoader> = {"
-      // and ends with "  }" before "export const Model"
-      return content.replace(
+      const result = content.replace(
         /const CUSTOM_LOADERS: Record<string, CustomLoader> = \{[\s\S]*?\n  \}(?=\n\n  export const Model)/,
         `const CUSTOM_LOADERS: Record<string, CustomLoader> = {
     // All custom loaders removed by branding (exclusive mode)
   }`,
       )
+      if (result === content) {
+        throw new Error("provider.ts branding transform failed: CUSTOM_LOADERS regex did not match")
+      }
+      return result
     },
   },
 

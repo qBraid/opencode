@@ -45,7 +45,8 @@ export const ModelsSchema = z.object({
     .optional(),
   /** Provider IDs to completely remove */
   removeProviders: z.array(z.string()).optional(),
-  /** If true, only use the providers defined in this config */
+  /** If true, only use the providers defined in this config (locks out all others).
+   *  When false/unset, branded models are prepended as defaults but upstream providers remain available. */
   exclusive: z.boolean().optional(),
 })
 
