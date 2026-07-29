@@ -125,10 +125,11 @@ function buildReplacements(config: Branding): Replacement[] {
   // Product name replacements (case-sensitive)
   // Use negative lookbehind/lookahead to avoid matching:
   // - @opencode-ai package names
+  // - external scoped packages like @gitlab/opencode-gitlab-auth (preceded by `@<scope>/`)
   // - Directory paths like /opencode/ (but allow /bin/opencode at end of path)
   // - File extensions like opencode.json
   replacements.push({
-    search: /(?<!@)(?<!\/opencode)opencode(?!-ai|\/|\.(json|ts|tsx|js))/g,
+    search: /(?<!@)(?<!@[a-z0-9-]{1,40}\/)(?<!\/opencode)opencode(?!-ai|-gitlab-auth|\/|\.(json|ts|tsx|js))/g,
     replace: r.productName,
     description: `opencode -> ${r.productName}`,
   })
@@ -224,6 +225,16 @@ const FILE_TRANSFORMS: FileTransform[] = [
   {
     pattern: "packages/opencode/src/cli/ui.ts",
     transform: (content, config) => {
+      // Guard against upstream drift: this transform assumes ui.ts defines a
+      // `const LOGO = [...]` array consumed by logo(). Newer upstream versions
+      // moved the logo into ./logo (glyphs.left/right). If the LOGO array is
+      // not present, skip the rewrite entirely rather than injecting a logo()
+      // that references an undefined LOGO (which crashes the CLI at startup).
+      if (!/const LOGO = \[\n[\s\S]*?\n  \]/.test(content)) {
+        warn("ui.ts: `const LOGO` array not found (upstream changed logo structure); skipping CLI logo branding")
+        return content
+      }
+
       const logoStr = config.logo.cli.map((row) => `    [\`${row[0]}\`, \`${row[1]}\`],`).join("\n")
 
       let result = content.replace(/const LOGO = \[\n[\s\S]*?\n  \]/, `const LOGO = [\n${logoStr}\n  ]`)
@@ -257,6 +268,14 @@ const FILE_TRANSFORMS: FileTransform[] = [
   {
     pattern: "packages/opencode/src/cli/cmd/tui/component/logo.tsx",
     transform: (content, config) => {
+      // Guard against upstream drift: skip if the expected LOGO_LEFT/LOGO_RIGHT
+      // arrays are no longer present (avoids injecting an unused PURPLE const
+      // and keeps the branded build aligned with the upstream component).
+      if (!/const LOGO_LEFT = \[/.test(content) || !/const LOGO_RIGHT = \[/.test(content)) {
+        warn("logo.tsx: LOGO_LEFT/LOGO_RIGHT not found (upstream changed TUI logo); skipping TUI logo branding")
+        return content
+      }
+
       const left = config.logo.tui.left.map((l) => `\`${l}\``).join(", ")
       const right = config.logo.tui.right.map((l) => `\`${l}\``).join(", ")
 
