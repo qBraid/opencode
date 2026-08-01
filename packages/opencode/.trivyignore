@@ -20,3 +20,27 @@
 CVE-2026-12151
 CVE-2026-1526
 CVE-2026-2229
+
+# ---------------------------------------------------------------------------
+# seroval 1.4.1 — CVE-2026-59940 (CRITICAL): `seroval.fromJSON()` Promise
+# resolver type confusion invokes attacker-controlled methods during
+# deserialization.
+#
+# TEMPORARY — unlike the undici entries above, a fix IS available (seroval
+# 1.5.3) and the bump is a one-line change to the existing root `overrides`
+# pin. Tracked in qBraid/opencode#44; remove this entry when that lands.
+#
+# seroval reaches the shipped binary ONLY transitively via
+#   @opentui/solid -> solid-js -> seroval
+# and is pinned to a single resolution by the root package.json `overrides`
+# block. The vulnerable API, `fromJSON()`, is solid's SSR/hydration payload
+# deserializer. The CLI performs no hydration: the shipped source contains no
+# `hydrate`, `renderToString`, `renderToStream` or `@solidjs/start` usage, and
+# its single `solid-js/web` import is `Dynamic` (a client-side component
+# helper) in src/cli/cmd/tui/routes/session/index.tsx. There is therefore no
+# call path to `fromJSON()`, and no attacker-supplied serialized payload for
+# one to consume.
+#
+# Suppressed to unblock the codeq staging/prod rollout (qBraid/opencode#16),
+# NOT because the risk was judged acceptable long-term.
+CVE-2026-59940
