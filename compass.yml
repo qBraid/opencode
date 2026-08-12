@@ -1,0 +1,16 @@
+name: opencode
+id: ari:cloud:compass:8526d2ba-687c-46b3-8b65-acaf550a9b39:component/141c5c30-d6a4-4eb9-b8dd-1a0c55663014/fad1eedf-e573-4b73-ace2-1fb6aee5a8f0
+description: The open source coding agent.
+configVersion: 1
+typeId: SERVICE
+fields:
+  tier: 4
+links:
+  - name: null
+    type: REPOSITORY
+    url: https://github.com/qBraid/opencode
+relationships:
+  DEPENDS_ON: []
+labels:
+  - source:github
+customFields: null
